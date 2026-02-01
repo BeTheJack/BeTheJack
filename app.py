@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 from fpdf import FPDF
 import os
 import re
@@ -7,61 +7,32 @@ import base64
 from PIL import Image, ImageOps, ImageDraw
 
 # ==============================================================================
-# 1. SETUP & CONNECTION (Auto-Hunter Logic)
+# 1. SETUP & CONNECTION (Pre-loaded with your Key)
 # ==============================================================================
 st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 
-def init_ai():
-    # 1. Get Key (Secrets or Hardcoded Fallback)
+def init_groq():
+    # 1. First, try to find the key in Streamlit Secrets (Best Practice)
     api_key = None
     try:
-        api_key = st.secrets["GOOGLE_API_KEY"]
+        api_key = st.secrets["GROQ_API_KEY"]
     except:
         pass
-        
+
+    # 2. If Secrets are missing, use this HARDCODED KEY (Your provided key)
     if not api_key:
-        # Emergency fallback to your provided key
-        api_key = "AIzaSyC9px-ILo8f_FfaBICLCOvIxctd2ijy0Ek"
+        api_key = "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"
 
     if not api_key:
         st.error("🚨 Critical Error: No API Key found.")
-        return None, None
+        return None
 
-    # 2. Hunt for a working model
     try:
-        genai.configure(api_key=api_key)
-        
-        # List all available models for this key
-        all_models = list(genai.list_models())
-        target_model_name = None
-        
-        # Priority list (Try these first)
-        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-        
-        # 1. Check for priorities
-        for p in priorities:
-            for m in all_models:
-                if p in m.name and 'generateContent' in m.supported_generation_methods:
-                    target_model_name = m.name
-                    break
-            if target_model_name: break
-            
-        # 2. If no priority, grab ANY compatible model
-        if not target_model_name:
-            for m in all_models:
-                if 'gemini' in m.name and 'generateContent' in m.supported_generation_methods:
-                    target_model_name = m.name
-                    break
-        
-        if target_model_name:
-            return genai.GenerativeModel(target_model_name), target_model_name
-        else:
-            st.error("No text-generation models found for this API Key.")
-            return None, None
-
+        client = Groq(api_key=api_key)
+        return client
     except Exception as e:
-        st.error(f"Connection Failed: {e}")
-        return None, None
+        st.error(f"Groq Connection Failed: {e}")
+        return None
 
 # ==============================================================================
 # 2. CORE LOGIC
@@ -92,7 +63,7 @@ def crop_circle_image(image_path):
         return "temp_circle.png"
     except: return image_path
 
-def generate_content(model, raw_data, jd):
+def generate_content(client, raw_data, jd):
     output_structure = """
     [SIDEBAR_START]
     NAME
@@ -139,6 +110,7 @@ def generate_content(model, raw_data, jd):
     prompt = f"""
     ROLE: Elite Resume Strategist.
     OBJECTIVE: Flesh out SKELETON HISTORY to match TARGET JD perfectly.
+    
     INPUTS:
     - TARGET JD: {jd}
     - SKELETON DATA: {raw_data}
@@ -158,8 +130,17 @@ def generate_content(model, raw_data, jd):
     """
     
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        # USING GROQ LLAMA 3 (70B Versatile)
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a resume expert."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return completion.choices[0].message.content
     except Exception as e:
         return f"Error: {e}"
 
@@ -169,6 +150,13 @@ def build_pdf(text, photo_path=None):
     pdf.set_auto_page_break(auto=False)
     pdf.set_font("Arial", size=10)
     
+    # Check for Error Text
+    if "Error:" in text:
+        pdf.set_font("Arial", 'B', 12)
+        pdf.set_text_color(255, 0, 0)
+        pdf.multi_cell(0, 10, f"AI ERROR:\n{text}")
+        return pdf.output(dest='S').encode('latin-1')
+
     # Parse
     sidebar_text = ""; main_text = ""
     if "[SIDEBAR_START]" in text and "[MAIN_START]" in text:
@@ -204,18 +192,15 @@ def build_pdf(text, photo_path=None):
         if not line: continue
         if line == "NAME": continue
         
-        # Name
         if "Uday" in line and len(line) < 30 and pdf.get_y() < 90:
                 pdf.set_font("Arial", 'B', 18); pdf.set_text_color(0, 45, 95)
                 pdf.set_x(5)
                 pdf.multi_cell(60, 8, line, align='C'); pdf.ln(3); pdf.set_text_color(50, 50, 50); continue
 
-        # Headers
         if line.isupper() and len(line) < 25:
             pdf.ln(5); pdf.set_x(5); pdf.set_font("Arial", 'B', 9); pdf.set_text_color(0, 45, 95)
             pdf.cell(60, 5, line, ln=True, border='B'); pdf.set_text_color(50, 50, 50); pdf.set_font("Arial", size=8); pdf.ln(1)
         
-        # Skills
         elif line.startswith("-") and ":" in line:
             parts = line.split(":", 1)
             cat = parts[0].replace("-", "").strip() + ":"
@@ -240,6 +225,7 @@ def build_pdf(text, photo_path=None):
         if not line: continue
         
         pdf.set_x(75)
+        # Page Break
         if pdf.get_y() > 280:
             pdf.add_page(); pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F'); pdf.set_xy(75, 20); pdf.set_font("Arial", size=9)
 
@@ -277,15 +263,15 @@ def display_pdf(pdf_bytes):
     st.markdown(pdf_display, unsafe_allow_html=True)
 
 # ==============================================================================
-# 3. UI
+# 3. UI (CLEAN & SIMPLE)
 # ==============================================================================
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Connect AI (With Auto-Hunter)
-model, model_name = init_ai()
-if model:
-    st.toast(f"Connected to: {model_name}", icon="⚡")
+# Connect AI
+client = init_groq()
+if client:
+    st.toast("System Online: Llama 3 (Groq)", icon="⚡")
 
 # Session State
 if "generated_content" not in st.session_state: st.session_state.generated_content = ""
@@ -324,16 +310,18 @@ uploaded_photo = st.file_uploader("Photo (Optional)", type=['jpg', 'jpeg', 'png'
 if st.button("🚀 GENERATE DRAFT", type="primary"):
     if not job_desc:
         st.error("No JD provided!")
-    elif not model:
-        st.error("AI Connection Failed.")
+    elif not client:
+        st.error("Groq Key Missing.")
     else:
         with st.spinner("Fabricating Identity..."):
-            st.session_state.generated_content = generate_content(model, about_me, job_desc)
+            st.session_state.generated_content = generate_content(client, about_me, job_desc)
+            
             # Render first pass
             photo_filename = "photo.jpg"
             if uploaded_photo:
                 with open(photo_filename, "wb") as f: f.write(uploaded_photo.getbuffer())
             elif os.path.exists(photo_filename): os.remove(photo_filename)
+            
             st.session_state.pdf_bytes = build_pdf(st.session_state.generated_content, photo_path=photo_filename if uploaded_photo else None)
 
 # PREVIEW & EDIT
