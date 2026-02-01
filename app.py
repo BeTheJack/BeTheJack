@@ -9,7 +9,7 @@ from PIL import Image, ImageOps, ImageDraw
 # CONFIGURATION
 # ==============================================================================
 # Ideally, move this to st.secrets for security in production
-API_KEY = "AIzaSyBQoA5kCYBSZCjPO9IyQXoHDoYuq1JUIh8"
+API_KEY = "AIzaSyC8Co0tB6iL9I2Ny8YzQuwwCmbgPuyc3o0"
 
 # ==============================================================================
 # BeTheJack (v67.0 - Auto-Model & Privacy Update)
