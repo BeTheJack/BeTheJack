@@ -9,11 +9,11 @@ from PIL import Image, ImageOps, ImageDraw
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-# ⚠️ REPLACE THIS WITH YOUR NEW PRIVATE KEY
+# ⚠️ REPLACE WITH YOUR PRIVATE KEY
 API_KEY = "AIzaSyC8Co0tB6iL9I2Ny8YzQuwwCmbgPuyc3o0" 
 
 # ==============================================================================
-# BeTheJack (v68.0 - Unified Live Preview Edition)
+# BeTheJack (v70.0 - Dashboard UI Edition)
 # ==============================================================================
 
 class PDF(FPDF):
@@ -56,9 +56,6 @@ def crop_circle_image(image_path):
     except: return image_path
 
 def generate_content(model, raw_data, jd):
-    visa_instruction = "Extract Visa Status and Nationality from SKELETON DATA and put in CONTACT section."
-    
-    # UNIFIED LAYOUT STRUCTURE (Sidebar Style)
     output_structure = """
     [SIDEBAR_START]
     NAME
@@ -114,7 +111,7 @@ def generate_content(model, raw_data, jd):
     2. **CAREER LADDER:** Rename skeleton titles (Junior -> Senior -> Target JD Title).
     3. **NO HEADLINE:** Do NOT add a headline or target role at the top.
     4. **PROJECTS:** INVENT 2 dummy projects.
-    5. **VISA/PHOTO:** {visa_instruction}
+    5. **VISA/PHOTO:** Extract Visa/Nationality from SKELETON DATA if present.
     6. **FORMATTING:** No markdown lines (---) or bolding (**).
     7. **LENGTH:** 1 Page maximum. 
     8. **BULLET LIMIT:** MAX 3 BULLETS per job.
@@ -151,7 +148,7 @@ def build_pdf(text, photo_path=None):
     # Sidebar BG
     pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F')
     
-    # Photo Logic (Auto-Adjust Y start)
+    # Photo Logic
     sidebar_y_start = 20
     if photo_path and os.path.exists(photo_path):
         processed_img = crop_circle_image(photo_path)
@@ -170,7 +167,7 @@ def build_pdf(text, photo_path=None):
         if not line: continue
         if line == "NAME": continue
         
-        # Name Logic
+        # Name
         if "Uday" in line and len(line) < 30 and pdf.get_y() < 90:
                 pdf.set_font("Arial", 'B', 18); pdf.set_text_color(0, 45, 95)
                 pdf.set_x(5)
@@ -181,7 +178,7 @@ def build_pdf(text, photo_path=None):
             pdf.ln(5); pdf.set_x(5); pdf.set_font("Arial", 'B', 9); pdf.set_text_color(0, 45, 95)
             pdf.cell(60, 5, line, ln=True, border='B'); pdf.set_text_color(50, 50, 50); pdf.set_font("Arial", size=8); pdf.ln(1)
         
-        # Fluid Skills
+        # Skills
         elif line.startswith("-") and ":" in line:
             parts = line.split(":", 1)
             cat = parts[0].replace("-", "").strip() + ":"
@@ -206,7 +203,6 @@ def build_pdf(text, photo_path=None):
         if not line: continue
         
         pdf.set_x(75)
-        # Page Break
         if pdf.get_y() > 280:
             pdf.add_page(); pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F'); pdf.set_xy(75, 20); pdf.set_font("Arial", size=9)
 
@@ -236,11 +232,9 @@ def build_pdf(text, photo_path=None):
         else:
             pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, line, align='L')
 
-    # Return Bytes
     return pdf.output(dest='S').encode('latin-1')
 
 def display_pdf(pdf_bytes):
-    """Generates an iframe to display PDF in Streamlit"""
     base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
     pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf"></iframe>'
     st.markdown(pdf_display, unsafe_allow_html=True)
@@ -250,6 +244,7 @@ def display_pdf(pdf_bytes):
 # ==============================================================================
 st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 
+# HEADER
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
@@ -258,20 +253,21 @@ try:
     genai.configure(api_key=API_KEY)
     target_model_name = get_best_model()
     model = genai.GenerativeModel(target_model_name)
-    st.sidebar.success(f"Connected: {target_model_name}")
+    st.success(f"⚡ System Online: {target_model_name}")
 except:
-    st.sidebar.error("API Key Error")
+    st.error("⚠️ API Key Error. Please update app.py")
 
 # Session State
-if "generated_content" not in st.session_state:
-    st.session_state.generated_content = ""
-if "pdf_bytes" not in st.session_state:
-    st.session_state.pdf_bytes = None
+if "generated_content" not in st.session_state: st.session_state.generated_content = ""
+if "pdf_bytes" not in st.session_state: st.session_state.pdf_bytes = None
 
-# === SIDEBAR INPUTS ===
-with st.sidebar:
-    st.header("1. Your Skeleton")
-    default_about = """NAME: 
+# === CONFIGURATION PANEL (TOP) ===
+with st.expander("🛠️ CONFIGURATION PANEL (Click to Expand/Collapse)", expanded=True):
+    col1, col2, col3 = st.columns([1.5, 1.5, 1])
+    
+    with col1:
+        st.subheader("1. Your Skeleton")
+        default_about = """NAME: 
 PHONE: 
 EMAIL: 
 LINKEDIN: 
@@ -289,22 +285,24 @@ Role | Company | Dates
 CERTIFICATIONS:
 - Cert 1
 - Cert 2"""
-    about_me = st.text_area("About Me", value=default_about, height=300)
-    
-    st.header("2. Target Job")
-    job_desc = st.text_area("Paste JD Here", height=300)
-    
-    st.header("3. Photo")
-    uploaded_photo = st.file_uploader("Profile Photo (Optional)", type=['jpg', 'jpeg', 'png'])
-
-    st.markdown("---")
-    if st.button("⚡ GENERATE DRAFT", type="primary"):
+        about_me = st.text_area("Your Details", value=default_about, height=250)
+        
+    with col2:
+        st.subheader("2. Target Job")
+        job_desc = st.text_area("Target JD", height=250, placeholder="Paste JD here...")
+        
+    with col3:
+        st.subheader("3. Assets")
+        uploaded_photo = st.file_uploader("Profile Photo", type=['jpg', 'jpeg', 'png'])
+        st.info("💡 Photo is optional. Layout auto-adjusts.")
+        
+    if st.button("🚀 GENERATE DRAFT", type="primary", use_container_width=True):
         if not job_desc:
-            st.error("Missing Job Description!")
+            st.warning("Please paste a Job Description!")
         else:
-            with st.spinner("Hallucinating Identity..."):
+            with st.spinner("Fabricating new identity..."):
                 st.session_state.generated_content = generate_content(model, about_me, job_desc)
-                # Auto-render first draft
+                # Auto-render initial PDF
                 photo_filename = "photo.jpg"
                 if uploaded_photo:
                     with open(photo_filename, "wb") as f: f.write(uploaded_photo.getbuffer())
@@ -313,39 +311,34 @@ CERTIFICATIONS:
                 st.session_state.pdf_bytes = build_pdf(st.session_state.generated_content, photo_path=photo_filename if uploaded_photo else None)
 
 
-# === MAIN SPLIT SCREEN ===
-col_edit, col_view = st.columns([1, 1])
-
-# LEFT: EDITOR
-with col_edit:
-    st.subheader("📝 Editor")
-    if st.session_state.generated_content:
-        # The text area updates the session state directly
-        edited_text = st.text_area("Live Edit", value=st.session_state.generated_content, height=800)
+# === MAIN WORKSPACE ===
+if st.session_state.generated_content:
+    st.markdown("---")
+    col_edit, col_view = st.columns([1, 1])
+    
+    with col_edit:
+        st.subheader("📝 Live Editor")
+        edited_text = st.text_area("Edit text here -> updates PDF", value=st.session_state.generated_content, height=800)
         st.session_state.generated_content = edited_text
         
-        if st.button("🔄 UPDATE PREVIEW"):
-             # Re-render PDF with edited text
-            photo_filename = "photo.jpg" # Re-check photo existence
+        if st.button("🔄 UPDATE PREVIEW", use_container_width=True):
+            photo_filename = "photo.jpg"
             st.session_state.pdf_bytes = build_pdf(st.session_state.generated_content, photo_path=photo_filename if uploaded_photo else None)
-            st.rerun() # Refresh app to update right side
+            st.rerun()
 
-# RIGHT: PREVIEW
-with col_view:
-    st.subheader("📄 Live Preview")
-    if st.session_state.pdf_bytes:
-        # Display PDF
-        display_pdf(st.session_state.pdf_bytes)
-        
-        # Download Button
-        safe_title = re.sub(r'[^a-zA-Z0-9]', '_', job_desc[:20]) if job_desc else "Resume"
-        st.download_button(
-            label="📥 DOWNLOAD PDF",
-            data=st.session_state.pdf_bytes,
-            file_name=f"BeTheJack_{safe_title}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            type="primary"
-        )
-    else:
-        st.info("👈 Enter details on the left and click GENERATE to see the preview.")
+    with col_view:
+        st.subheader("📄 PDF Preview")
+        if st.session_state.pdf_bytes:
+            display_pdf(st.session_state.pdf_bytes)
+            
+            safe_title = re.sub(r'[^a-zA-Z0-9]', '_', job_desc[:20]) if job_desc else "Resume"
+            st.download_button(
+                label="💾 DOWNLOAD FINAL PDF",
+                data=st.session_state.pdf_bytes,
+                file_name=f"BeTheJack_{safe_title}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary"
+            )
+else:
+    st.info("👆 Configure your details above and click 'GENERATE DRAFT' to start.")
