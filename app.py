@@ -9,7 +9,7 @@ from PIL import Image, ImageOps, ImageDraw
 # CONFIGURATION
 # ==============================================================================
 # Ideally, move this to st.secrets for security in production
-API_KEY = "AIzaSyBQoA5kCYBSZCjPO9IyQXoHDoYuq1JUIh8"
+API_KEY = "AIzaSyC9px-ILo8f_FfaBICLCOvIxctd2ijy0Ek"
 
 # ==============================================================================
 # BeTheJack (v67.0 - Auto-Model & Privacy Update)
@@ -401,8 +401,8 @@ with col2:
 
 # SETTINGS
 st.subheader("3. Select Mode")
-mode = st.radio("Choose Layout:", ["Dubai (Photo, Sidebar)", "India (Jake Style, 1-Page)"])
-style_choice = "Dubai" if "Dubai" in mode else "India"
+mode = st.radio("Choose Layout:", ["Global (Photo, Sidebar)", "India Still in test"])
+style_choice = "Global" if "Dubai" in mode else "India"
 
 # IMAGE UPLOADER
 uploaded_photo = None
