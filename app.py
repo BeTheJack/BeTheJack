@@ -7,26 +7,61 @@ import base64
 from PIL import Image, ImageOps, ImageDraw
 
 # ==============================================================================
-# 1. SETUP & CONNECTION (Admin Only)
+# 1. SETUP & CONNECTION (Auto-Hunter Logic)
 # ==============================================================================
 st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 
 def init_ai():
-    # Attempt to load key from Secrets
+    # 1. Get Key (Secrets or Hardcoded Fallback)
     api_key = None
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
     except:
-        st.error("🚨 System Offline. Admin: Please add GOOGLE_API_KEY to Secrets.")
-        return None
+        pass
+        
+    if not api_key:
+        # Emergency fallback to your provided key
+        api_key = "AIzaSyBQoA5kCYBSZCjPO9IyQXoHDoYuq1JUIh8"
 
+    if not api_key:
+        st.error("🚨 Critical Error: No API Key found.")
+        return None, None
+
+    # 2. Hunt for a working model
     try:
         genai.configure(api_key=api_key)
-        # Force Flash 1.5 for speed and stability
-        return genai.GenerativeModel("models/gemini-1.5-flash")
+        
+        # List all available models for this key
+        all_models = list(genai.list_models())
+        target_model_name = None
+        
+        # Priority list (Try these first)
+        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        
+        # 1. Check for priorities
+        for p in priorities:
+            for m in all_models:
+                if p in m.name and 'generateContent' in m.supported_generation_methods:
+                    target_model_name = m.name
+                    break
+            if target_model_name: break
+            
+        # 2. If no priority, grab ANY compatible model
+        if not target_model_name:
+            for m in all_models:
+                if 'gemini' in m.name and 'generateContent' in m.supported_generation_methods:
+                    target_model_name = m.name
+                    break
+        
+        if target_model_name:
+            return genai.GenerativeModel(target_model_name), target_model_name
+        else:
+            st.error("No text-generation models found for this API Key.")
+            return None, None
+
     except Exception as e:
-        st.error(f"AI Connection Error: {e}")
-        return None
+        st.error(f"Connection Failed: {e}")
+        return None, None
 
 # ==============================================================================
 # 2. CORE LOGIC
@@ -58,7 +93,6 @@ def crop_circle_image(image_path):
     except: return image_path
 
 def generate_content(model, raw_data, jd):
-    # THE MASTER LAYOUT
     output_structure = """
     [SIDEBAR_START]
     NAME
@@ -248,10 +282,10 @@ def display_pdf(pdf_bytes):
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Connect AI
-model = init_ai()
+# Connect AI (With Auto-Hunter)
+model, model_name = init_ai()
 if model:
-    st.toast("System Online: Gemini 1.5 Flash", icon="⚡")
+    st.toast(f"Connected to: {model_name}", icon="⚡")
 
 # Session State
 if "generated_content" not in st.session_state: st.session_state.generated_content = ""
@@ -291,7 +325,7 @@ if st.button("🚀 GENERATE DRAFT", type="primary"):
     if not job_desc:
         st.error("No JD provided!")
     elif not model:
-        st.error("AI Connect Failed. Check Secrets.")
+        st.error("AI Connection Failed.")
     else:
         with st.spinner("Fabricating Identity..."):
             st.session_state.generated_content = generate_content(model, about_me, job_desc)
