@@ -8,11 +8,10 @@ from PIL import Image, ImageOps, ImageDraw
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-# Ideally, move this to st.secrets for security in production
 API_KEY = "AIzaSyC9px-ILo8f_FfaBICLCOvIxctd2ijy0Ek"
 
 # ==============================================================================
-# BeTheJack (v67.0 - Auto-Model & Privacy Update)
+# BeTheJack ("My Version" - Classic UI & Google Gemini)
 # ==============================================================================
 
 class PDF(FPDF):
@@ -65,7 +64,7 @@ def crop_circle_image(image_path):
         return "temp_circle.png"
     except: return image_path
 
-def generate_content(model, raw_data, jd, style="Dubai"):
+def generate_content(model, raw_data, jd, style="Global"):
     
     if style == "India":
         visa_instruction = "Do NOT include Visa Status, Nationality, or Photo."
@@ -107,6 +106,7 @@ def generate_content(model, raw_data, jd, style="Dubai"):
         - [Cert 1]
         """
     else:
+        # GLOBAL STYLE (Previously Dubai)
         visa_instruction = "Extract Visa Status and Nationality from SKELETON DATA and put in CONTACT section."
         layout_instruction = "2-Column Sidebar style. Sidebar: Contact/Intro/Skills/Certs/Edu. Main: Experience/Projects."
         output_structure = """
@@ -184,8 +184,8 @@ def build_pdf(text, style, photo_path=None):
     pdf.add_page()
     pdf.set_auto_page_break(auto=False)
     
-    if style == "Dubai":
-        # === DUBAI LAYOUT ===
+    if style == "Global":
+        # === GLOBAL LAYOUT (Sidebar/Photo) ===
         pdf.set_font("Arial", size=10)
         
         # Parse
@@ -286,7 +286,7 @@ def build_pdf(text, style, photo_path=None):
                 pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, line, align='L')
 
     else:
-        # === INDIA LAYOUT (FIXED) ===
+        # === INDIA LAYOUT (Classic) ===
         pdf.set_font("Times", size=10)
         text = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
         lines = sanitize_text(text).split('\n')
@@ -296,7 +296,7 @@ def build_pdf(text, style, photo_path=None):
             line = line.strip()
             if not line: continue
             
-            if "Uday" in line and len(line) < 30: # Name detection fallback
+            if "Uday" in line and len(line) < 30: 
                 pdf.set_font("Times", 'B', 22)
                 pdf.cell(0, 8, line, ln=True, align='C')
                 pdf.ln(6) 
@@ -356,10 +356,10 @@ st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Initialize AI with Auto-Model Selection
+# Initialize AI
 try:
     genai.configure(api_key=API_KEY)
-    target_model_name = get_best_model() # AUTO-DETECT MODEL
+    target_model_name = get_best_model() 
     model = genai.GenerativeModel(target_model_name)
     st.sidebar.success(f"Connected: {target_model_name}")
 except:
@@ -374,7 +374,6 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Your Skeleton")
-    # BLANK TEMPLATE FOR PRIVACY
     default_about = """NAME: 
 PHONE: 
 EMAIL: 
@@ -401,12 +400,13 @@ with col2:
 
 # SETTINGS
 st.subheader("3. Select Mode")
-mode = st.radio("Choose Layout:", ["Global (Photo, Sidebar)", "India Still in test"])
-style_choice = "Global" if "Dubai" in mode else "India"
+# RENAMED DUBAI TO GLOBAL
+mode = st.radio("Choose Layout:", ["Global (Photo, Sidebar)", "India (Still in testing)"])
+style_choice = "Global" if "Global" in mode else "India"
 
 # IMAGE UPLOADER
 uploaded_photo = None
-if style_choice == "Dubai":
+if style_choice == "Global":
     uploaded_photo = st.file_uploader("Upload Profile Photo (Optional)", type=['jpg', 'jpeg', 'png'])
 
 # ==============================================================================
@@ -427,7 +427,7 @@ if st.session_state.generated_content:
     st.subheader("4. Edit Draft (Important!)")
     st.info("💡 You can edit text, fix typos, or add lines here. The PDF will look exactly like this.")
     
-    # Text Area updates session state automatically
+    # Text Area
     edited_content = st.text_area("Resume Content Editor", value=st.session_state.generated_content, height=600)
     st.session_state.generated_content = edited_content
 
