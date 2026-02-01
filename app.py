@@ -21,7 +21,7 @@ def init_ai():
         
     if not api_key:
         # Emergency fallback to your provided key
-        api_key = "AIzaSyBQoA5kCYBSZCjPO9IyQXoHDoYuq1JUIh8"
+        api_key = "AIzaSyBnDvt0rp6yMqpT95bI9VFQr6xzucObANQ"
 
     if not api_key:
         st.error("🚨 Critical Error: No API Key found.")
