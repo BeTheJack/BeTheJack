@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, ImageDraw
 API_KEY = "AIzaSyC8Co0tB6iL9I2Ny8YzQuwwCmbgPuyc3o0" 
 
 # ==============================================================================
-# BeTheJack (v70.0 - Dashboard UI Edition)
+# BeTheJack (v71.0 - Stable Flash Edition)
 # ==============================================================================
 
 class PDF(FPDF):
@@ -21,19 +21,6 @@ class PDF(FPDF):
         super().__init__(*args, **kwargs)
         if not hasattr(self, 'unifontsubset'):
             self.unifontsubset = False
-
-def get_best_model():
-    """Finds the best available Gemini model to prevent 404 errors."""
-    try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        for p in priorities:
-            if p in available_models: return p
-        return "models/gemini-pro"
-    except: return "models/gemini-pro"
 
 def sanitize_text(text):
     replacements = {'\u2022': '-', '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '…': '...'}
@@ -248,10 +235,11 @@ st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Init AI
+# Init AI (HARDCODED TO FLASH 1.5)
 try:
     genai.configure(api_key=API_KEY)
-    target_model_name = get_best_model()
+    # FORCE GEMINI 1.5 FLASH (Most Stable/Free Model)
+    target_model_name = "models/gemini-1.5-flash"
     model = genai.GenerativeModel(target_model_name)
     st.success(f"⚡ System Online: {target_model_name}")
 except:
