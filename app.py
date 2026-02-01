@@ -8,11 +8,11 @@ from PIL import Image, ImageOps, ImageDraw
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-# Ideally, move this to st.secrets for security
+# Ideally, move this to st.secrets for security in production
 API_KEY = "AIzaSyBQoA5kCYBSZCjPO9IyQXoHDoYuq1JUIh8"
 
 # ==============================================================================
-# BeTheJack (v66.0 - Jack of all Trades Edition)
+# BeTheJack (v67.0 - Auto-Model & Privacy Update)
 # ==============================================================================
 
 class PDF(FPDF):
@@ -20,6 +20,30 @@ class PDF(FPDF):
         super().__init__(*args, **kwargs)
         if not hasattr(self, 'unifontsubset'):
             self.unifontsubset = False
+
+def get_best_model():
+    """Finds the best available Gemini model to prevent 404 errors."""
+    try:
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # Priority list
+        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
+        
+        for p in priorities:
+            if p in available_models:
+                return p
+        
+        # Fallback to first available Gemini model
+        for m in available_models:
+            if 'gemini' in m:
+                return m
+        
+        return "models/gemini-pro" # Last resort default
+    except:
+        return "models/gemini-pro"
 
 def sanitize_text(text):
     replacements = {'\u2022': '-', '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '…': '...'}
@@ -272,7 +296,7 @@ def build_pdf(text, style, photo_path=None):
             line = line.strip()
             if not line: continue
             
-            if "Uday" in line and len(line) < 30:
+            if "Uday" in line and len(line) < 30: # Name detection fallback
                 pdf.set_font("Times", 'B', 22)
                 pdf.cell(0, 8, line, ln=True, align='C')
                 pdf.ln(6) 
@@ -332,12 +356,14 @@ st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Initialize AI
+# Initialize AI with Auto-Model Selection
 try:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel("models/gemini-1.5-flash")
+    target_model_name = get_best_model() # AUTO-DETECT MODEL
+    model = genai.GenerativeModel(target_model_name)
+    st.sidebar.success(f"Connected: {target_model_name}")
 except:
-    st.error("API Key Error")
+    st.sidebar.error("API Key Error")
 
 # SESSION STATE
 if "generated_content" not in st.session_state:
@@ -348,26 +374,26 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Your Skeleton")
-    default_about = """NAME: Uday Katare
-PHONE: +91 8401213607
-EMAIL: udaykatare1@gmail.com
-LINKEDIN: linkedin.com/in/udaykatare
-LOCATION: Dubai, UAE
-VISA: Tourist Visa
-NATIONALITY: Indian
+    # BLANK TEMPLATE FOR PRIVACY
+    default_about = """NAME: 
+PHONE: 
+EMAIL: 
+LINKEDIN: 
+LOCATION: 
+VISA: 
+NATIONALITY: 
 
 EDUCATION:
-Bachelor of Computer Applications | North Maharashtra University | 2021
+Degree | University | Year
 
 WORK HISTORY:
-Technology Specialist | Morgan Stanley (Z&A Infotek) | Dec 2023 - Present
-Senior Technical Site Coordinator | Reliance Industries | Aug 2022 - Dec 2023
-Technical Support Executive | Tech Mahindra | Oct 2021 - Apr 2022
+Role | Company | Dates
+Role | Company | Dates
 
 CERTIFICATIONS:
-- ITIL 4 Foundation
-- Microsoft Excel Advanced"""
-    about_me = st.text_area("About Me (Edit freely)", value=default_about, height=300)
+- Cert 1
+- Cert 2"""
+    about_me = st.text_area("About Me (Fill this in)", value=default_about, height=300)
 
 with col2:
     st.subheader("2. Target Job")
