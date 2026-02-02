@@ -8,7 +8,7 @@ from PIL import Image, ImageOps, ImageDraw
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-API_KEY = "AIzaSyC9px-ILo8f_FfaBICLCOvIxctd2ijy0Ek"
+API_KEY = "AIzaSyBRdHpWhrWk-Cm3hbjEgk-8nOpcnY6ugKc"
 
 # ==============================================================================
 # BeTheJack ("My Version" - Classic UI & Google Gemini)
