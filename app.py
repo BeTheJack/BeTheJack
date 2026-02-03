@@ -3,17 +3,27 @@ import google.generativeai as genai
 from fpdf import FPDF
 import os
 import re
+import json
 from PIL import Image, ImageOps, ImageDraw
 
 # ==============================================================================
-# CONFIGURATION
+# 1. SETUP & SECURITY (No Hardcoded Keys)
 # ==============================================================================
-API_KEY = "AIzaSyBRdHpWhrWk-Cm3hbjEgk-8nOpcnY6ugKc"
+st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
+
+def init_ai():
+    # Attempt to load key from Streamlit Secrets
+    try:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        genai.configure(api_key=api_key)
+        return True
+    except:
+        st.error("🚨 API Key Missing. Admin: Add 'GOOGLE_API_KEY' to Streamlit Secrets.")
+        return False
 
 # ==============================================================================
-# BeTheJack ("My Version" - Classic UI & Google Gemini)
+# 2. HELPER FUNCTIONS
 # ==============================================================================
-
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -21,35 +31,19 @@ class PDF(FPDF):
             self.unifontsubset = False
 
 def get_best_model():
-    """Finds the best available Gemini model to prevent 404 errors."""
     try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        # Priority list
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Prefer faster/newer models
         priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        
         for p in priorities:
-            if p in available_models:
-                return p
-        
-        # Fallback to first available Gemini model
-        for m in available_models:
-            if 'gemini' in m:
-                return m
-        
-        return "models/gemini-pro" # Last resort default
-    except:
+            if p in available: return p
         return "models/gemini-pro"
+    except: return "models/gemini-pro"
 
 def sanitize_text(text):
     replacements = {'\u2022': '-', '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '…': '...'}
     for k, v in replacements.items(): text = text.replace(k, v)
-    text = text.replace("**", "") 
-    text = text.replace("---", "")
-    text = text.replace("###", "")
+    text = text.replace("**", "").replace("---", "").replace("###", "")
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def crop_circle_image(image_path):
@@ -64,11 +58,15 @@ def crop_circle_image(image_path):
         return "temp_circle.png"
     except: return image_path
 
-def generate_content(model, raw_data, jd, style="Global"):
+# ==============================================================================
+# 3. CONTENT GENERATION
+# ==============================================================================
+def generate_content(raw_data, jd, style="Global"):
+    model_name = get_best_model()
+    model = genai.GenerativeModel(model_name)
     
     if style == "India":
         visa_instruction = "Do NOT include Visa Status, Nationality, or Photo."
-        layout_instruction = "Single Column 'Jake Resume'. Limit to 2-3 bullets."
         output_structure = """
         NAME
         [Name]
@@ -106,9 +104,8 @@ def generate_content(model, raw_data, jd, style="Global"):
         - [Cert 1]
         """
     else:
-        # GLOBAL STYLE (Previously Dubai)
+        # GLOBAL STYLE
         visa_instruction = "Extract Visa Status and Nationality from SKELETON DATA and put in CONTACT section."
-        layout_instruction = "2-Column Sidebar style. Sidebar: Contact/Intro/Skills/Certs/Edu. Main: Experience/Projects."
         output_structure = """
         [SIDEBAR_START]
         NAME
@@ -185,10 +182,7 @@ def build_pdf(text, style, photo_path=None):
     pdf.set_auto_page_break(auto=False)
     
     if style == "Global":
-        # === GLOBAL LAYOUT (Sidebar/Photo) ===
         pdf.set_font("Arial", size=10)
-        
-        # Parse
         sidebar_text = ""; main_text = ""
         if "[SIDEBAR_START]" in text and "[MAIN_START]" in text:
             parts = text.split("[MAIN_START]")
@@ -198,13 +192,10 @@ def build_pdf(text, style, photo_path=None):
             parts = text.split("PROFESSIONAL EXPERIENCE")
             sidebar_text = parts[0].replace("[SIDEBAR_START]", "").strip()
             main_text = "PROFESSIONAL EXPERIENCE\n" + parts[1].strip()
-        else:
-            main_text = text; sidebar_text = "Parse Error"
+        else: main_text = text; sidebar_text = "Parse Error"
 
-        # Sidebar BG
         pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F')
         
-        # Photo Processing
         sidebar_y_start = 20
         if photo_path and os.path.exists(photo_path):
             processed_img = crop_circle_image(photo_path)
@@ -214,245 +205,141 @@ def build_pdf(text, style, photo_path=None):
                 try: os.remove("temp_circle.png")
                 except: pass
         
-        # Sidebar Render
         pdf.set_xy(5, sidebar_y_start); pdf.set_text_color(50, 50, 50)
         pdf.set_right_margin(210 - 70 + 5) 
-        
         for line in sanitize_text(sidebar_text).split('\n'):
             line = line.strip()
             if not line: continue
             if line == "NAME": continue
-            
             if "Uday" in line and len(line) < 30 and pdf.get_y() < 90:
-                 pdf.set_font("Arial", 'B', 18); pdf.set_text_color(0, 45, 95)
-                 pdf.set_x(5)
-                 pdf.multi_cell(60, 8, line, align='C'); pdf.ln(3); pdf.set_text_color(50, 50, 50); continue
-
+                 pdf.set_font("Arial", 'B', 18); pdf.set_text_color(0, 45, 95); pdf.set_x(5); pdf.multi_cell(60, 8, line, align='C'); pdf.ln(3); pdf.set_text_color(50, 50, 50); continue
             if line.isupper() and len(line) < 25:
-                pdf.ln(5); pdf.set_x(5); pdf.set_font("Arial", 'B', 9); pdf.set_text_color(0, 45, 95)
-                pdf.cell(60, 5, line, ln=True, border='B'); pdf.set_text_color(50, 50, 50); pdf.set_font("Arial", size=8); pdf.ln(1)
-            
+                pdf.ln(5); pdf.set_x(5); pdf.set_font("Arial", 'B', 9); pdf.set_text_color(0, 45, 95); pdf.cell(60, 5, line, ln=True, border='B'); pdf.set_text_color(50, 50, 50); pdf.set_font("Arial", size=8); pdf.ln(1)
             elif line.startswith("-") and ":" in line:
-                parts = line.split(":", 1)
-                cat = parts[0].replace("-", "").strip() + ":"
-                det = parts[1].strip()
-                pdf.set_x(5); pdf.set_font("Arial", 'B', 8.5)
-                pdf.write(4.5, cat + " ")
-                pdf.set_font("Arial", '', 8.5)
-                pdf.write(4.5, det)
-                pdf.ln(5) 
+                parts = line.split(":", 1); cat = parts[0].replace("-", "").strip() + ":"; det = parts[1].strip()
+                pdf.set_x(5); pdf.set_font("Arial", 'B', 8.5); pdf.write(4.5, cat + " "); pdf.set_font("Arial", '', 8.5); pdf.write(4.5, det); pdf.ln(5) 
             else:
-                pdf.set_x(5)
-                if "@" in line or "LinkedIn" in line: pdf.set_font("Arial", size=8)
-                else: pdf.set_font("Arial", size=9)
-                pdf.multi_cell(60, 4.5, line, align='L') 
+                pdf.set_x(5); pdf.set_font("Arial", size=(8 if "@" in line else 9)); pdf.multi_cell(60, 4.5, line, align='L') 
 
-        # Main Render
-        pdf.set_right_margin(10)
-        pdf.set_xy(75, 20); pdf.set_text_color(0, 0, 0)
-        
+        pdf.set_right_margin(10); pdf.set_xy(75, 20); pdf.set_text_color(0, 0, 0)
         for line in sanitize_text(main_text).split('\n'):
             line = line.strip()
             if not line: continue
-            
             pdf.set_x(75)
-            if pdf.get_y() > 280:
-                pdf.add_page(); pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F'); pdf.set_xy(75, 20); pdf.set_font("Arial", size=9)
-
+            if pdf.get_y() > 280: pdf.add_page(); pdf.set_fill_color(240, 242, 245); pdf.rect(0, 0, 70, 297, 'F'); pdf.set_xy(75, 20); pdf.set_font("Arial", size=9)
             if line in ["PROFESSIONAL EXPERIENCE", "PROJECTS"]:
                 if pdf.get_y() > 60: pdf.ln(5)
                 else: pdf.ln(2)
-                pdf.set_x(75); pdf.set_font("Arial", 'B', 12); pdf.set_text_color(0, 45, 95)
-                pdf.cell(125, 8, line, ln=True, border='B'); pdf.set_text_color(0, 0, 0); pdf.ln(3)
-
+                pdf.set_x(75); pdf.set_font("Arial", 'B', 12); pdf.set_text_color(0, 45, 95); pdf.cell(125, 8, line, ln=True, border='B'); pdf.set_text_color(0, 0, 0); pdf.ln(3)
             elif "|" in line and "University" not in line: 
                  parts = line.split('|')
                  if len(parts) >= 2:
                      p1 = parts[0].strip(); p2 = parts[1].strip(); p3 = parts[2].strip() if len(parts) > 2 else ""
                      pdf.ln(3); pdf.set_x(75); pdf.set_font("Arial", 'B', 10)
-                     if p3: # Job
-                        pdf.cell(125, 5, p2, ln=True)
-                        pdf.set_x(75); pdf.set_font("Arial", 'I', 10); pdf.set_text_color(80, 80, 80)
-                        pdf.cell(125, 5, f"{p1}  --  {p3}", ln=True)
-                     else: # Project
-                        pdf.cell(125, 5, p1, ln=True)
-                        pdf.set_x(75); pdf.set_font("Arial", 'I', 10); pdf.set_text_color(80, 80, 80)
-                        pdf.multi_cell(125, 5, f"Tech: {p2}", align='L')
+                     if p3: pdf.cell(125, 5, p2, ln=True); pdf.set_x(75); pdf.set_font("Arial", 'I', 10); pdf.set_text_color(80, 80, 80); pdf.cell(125, 5, f"{p1}  --  {p3}", ln=True)
+                     else: pdf.cell(125, 5, p1, ln=True); pdf.set_x(75); pdf.set_font("Arial", 'I', 10); pdf.set_text_color(80, 80, 80); pdf.multi_cell(125, 5, f"Tech: {p2}", align='L')
                      pdf.set_text_color(0, 0, 0); continue
-
-            elif line.startswith("-"):
-                pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, f"  {line}", align='L') 
-            else:
-                pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, line, align='L')
+            elif line.startswith("-"): pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, f"  {line}", align='L') 
+            else: pdf.set_x(75); pdf.set_font("Arial", size=9); pdf.multi_cell(125, 4.5, line, align='L')
 
     else:
-        # === INDIA LAYOUT (Classic) ===
         pdf.set_font("Times", size=10)
         text = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
         lines = sanitize_text(text).split('\n')
         pdf.set_y(10)
-
         for line in lines:
             line = line.strip()
             if not line: continue
-            
-            if "Uday" in line and len(line) < 30: 
-                pdf.set_font("Times", 'B', 22)
-                pdf.cell(0, 8, line, ln=True, align='C')
-                pdf.ln(6) 
-                pdf.set_font("Times", size=10)
-                continue
-            
-            if "@" in line or "|" in line and len(line) < 100:
-                pdf.cell(0, 5, line, ln=True, align='C')
-                pdf.ln(2)
-                continue
-                
-            if line.isupper() and len(line) < 40 and "UNIVERSITY" not in line:
-                pdf.ln(5)
-                pdf.set_font("Times", 'B', 11)
-                pdf.cell(0, 6, line, ln=True, border='B')
-                pdf.set_font("Times", size=10)
-                pdf.ln(2)
-                continue
-                
+            if "Uday" in line and len(line) < 30: pdf.set_font("Times", 'B', 22); pdf.cell(0, 8, line, ln=True, align='C'); pdf.ln(6); pdf.set_font("Times", size=10); continue
+            if "@" in line or "|" in line and len(line) < 100: pdf.cell(0, 5, line, ln=True, align='C'); pdf.ln(2); continue
+            if line.isupper() and len(line) < 40 and "UNIVERSITY" not in line: pdf.ln(5); pdf.set_font("Times", 'B', 11); pdf.cell(0, 6, line, ln=True, border='B'); pdf.set_font("Times", size=10); pdf.ln(2); continue
             if "|" in line:
                 parts = line.split('|')
                 if len(parts) >= 2:
                     p1 = parts[0].strip(); p2 = parts[1].strip(); p3 = parts[2].strip() if len(parts) > 2 else ""
                     pdf.ln(4)
-                    
-                    if p3: # Job
-                        pdf.set_font("Times", 'B', 11)
-                        pdf.cell(130, 5, p2, ln=0, align='L')
-                        pdf.set_font("Times", 'I', 11)
-                        pdf.cell(0, 5, p3, ln=1, align='R')
-                        pdf.set_font("Times", 'I', 11)
-                        pdf.cell(0, 5, p1, ln=True, align='L')
-                    else: # Project
-                        pdf.set_font("Times", 'B', 11)
-                        pdf.cell(130, 5, p1, ln=0, align='L')
-                        pdf.set_font("Times", 'I', 11)
-                        pdf.cell(0, 5, p2, ln=1, align='R')
-                        
-                    pdf.set_font("Times", size=10)
-                    continue
-
-            if line.startswith("-"):
-                pdf.set_x(10)
-                pdf.multi_cell(0, 5, f"{line}", align='L')
-                continue
-                
+                    if p3: pdf.set_font("Times", 'B', 11); pdf.cell(130, 5, p2, ln=0, align='L'); pdf.set_font("Times", 'I', 11); pdf.cell(0, 5, p3, ln=1, align='R'); pdf.set_font("Times", 'I', 11); pdf.cell(0, 5, p1, ln=True, align='L')
+                    else: pdf.set_font("Times", 'B', 11); pdf.cell(130, 5, p1, ln=0, align='L'); pdf.set_font("Times", 'I', 11); pdf.cell(0, 5, p2, ln=1, align='R')
+                    pdf.set_font("Times", size=10); continue
+            if line.startswith("-"): pdf.set_x(10); pdf.multi_cell(0, 5, f"{line}", align='L'); continue
             pdf.multi_cell(0, 5, line, align='L')
-
-    # SAVE TO BYTES
     return pdf.output(dest='S').encode('latin-1')
 
 # ==============================================================================
-# STREAMLIT UI
+# UI
 # ==============================================================================
-st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
-
 st.title("🃏 BeTheJack")
 st.markdown("### (Jack of all Trades)")
 
-# Initialize AI
-try:
-    genai.configure(api_key=API_KEY)
-    target_model_name = get_best_model() 
-    model = genai.GenerativeModel(target_model_name)
-    st.sidebar.success(f"Connected: {target_model_name}")
-except:
-    st.sidebar.error("API Key Error")
+# Connect AI
+ai_connected = init_ai()
 
-# SESSION STATE
-if "generated_content" not in st.session_state:
-    st.session_state.generated_content = ""
+if "generated_content" not in st.session_state: st.session_state.generated_content = ""
+# Default Skeleton
+default_about = "NAME: \nPHONE: \nEMAIL: \nLINKEDIN: \nLOCATION: \nVISA: \nNATIONALITY: \n\nEDUCATION:\nDegree | University | Year\n\nWORK HISTORY:\nRole | Company | Dates\nRole | Company | Dates\n\nCERTIFICATIONS:\n- Cert 1"
+
+# === PROFILE MANAGER (SAVE/LOAD) ===
+with st.sidebar:
+    st.header("💾 My Identity")
+    st.info("Save your details to your computer so you don't have to type them every time.")
+    
+    # LOAD
+    uploaded_file = st.file_uploader("📂 Load Profile", type="json")
+    if uploaded_file is not None:
+        try:
+            data = json.load(uploaded_file)
+            st.session_state['about_me_content'] = data.get("about_me", default_about)
+            st.success("Profile Loaded!")
+        except:
+            st.error("Invalid file.")
+            
+    # Initialize session state for text area if not exists
+    if 'about_me_content' not in st.session_state:
+        st.session_state['about_me_content'] = default_about
 
 # INPUTS
 col1, col2 = st.columns(2)
-
 with col1:
     st.subheader("1. Your Skeleton")
-    default_about = """NAME: 
-PHONE: 
-EMAIL: 
-LINKEDIN: 
-LOCATION: 
-VISA: 
-NATIONALITY: 
-
-EDUCATION:
-Degree | University | Year
-
-WORK HISTORY:
-Role | Company | Dates
-Role | Company | Dates
-
-CERTIFICATIONS:
-- Cert 1
-- Cert 2"""
-    about_me = st.text_area("About Me (Fill this in)", value=default_about, height=300)
+    
+    # SAVE BUTTON (Downloads JSON)
+    profile_data = json.dumps({"about_me": st.session_state['about_me_content']})
+    st.download_button("💾 Save Profile", data=profile_data, file_name="my_profile.json", mime="application/json", help="Download your details to use later.")
+    
+    about_me = st.text_area("About Me", value=st.session_state['about_me_content'], height=300, key="about_input")
+    # Sync manual edits back to session state for saving
+    st.session_state['about_me_content'] = about_me
 
 with col2:
     st.subheader("2. Target Job")
-    job_desc = st.text_area("Paste Job Description (JD) here", height=300, placeholder="Paste the JD here...")
+    job_desc = st.text_area("Paste Job Description (JD)", height=300)
 
-# SETTINGS
 st.subheader("3. Select Mode")
-# RENAMED DUBAI TO GLOBAL
-mode = st.radio("Choose Layout:", ["Global (Photo, Sidebar)", "India (Still in testing)"])
+mode = st.radio("Choose Layout:", ["Global (Photo, Sidebar)", "India (Jake Style, 1-Page)"])
 style_choice = "Global" if "Global" in mode else "India"
 
-# IMAGE UPLOADER
 uploaded_photo = None
-if style_choice == "Global":
-    uploaded_photo = st.file_uploader("Upload Profile Photo (Optional)", type=['jpg', 'jpeg', 'png'])
+if style_choice == "Global": uploaded_photo = st.file_uploader("Upload Profile Photo (Optional)", type=['jpg', 'jpeg', 'png'])
 
-# ==============================================================================
-# STEP 1: GENERATE DRAFT
-# ==============================================================================
 if st.button("STEP 1: GENERATE DRAFT", type="primary"):
-    if not job_desc:
-        st.error("Please paste a Job Description first!")
+    if not job_desc: st.error("Please paste a Job Description first!")
+    elif not ai_connected: st.error("AI not connected. Check Secrets.")
     else:
         with st.spinner("Hallucinating new identity..."):
-            st.session_state.generated_content = generate_content(model, about_me, job_desc, style=style_choice)
-            st.success("Draft Generated! Edit it below before rendering.")
+            st.session_state.generated_content = generate_content(about_me, job_desc, style=style_choice)
+            st.success("Draft Generated!")
 
-# ==============================================================================
-# STEP 2: EDIT DRAFT
-# ==============================================================================
 if st.session_state.generated_content:
     st.subheader("4. Edit Draft (Important!)")
-    st.info("💡 You can edit text, fix typos, or add lines here. The PDF will look exactly like this.")
-    
-    # Text Area
     edited_content = st.text_area("Resume Content Editor", value=st.session_state.generated_content, height=600)
     st.session_state.generated_content = edited_content
-
-    # ==========================================================================
-    # STEP 3: RENDER PDF
-    # ==========================================================================
     if st.button("STEP 2: RENDER PDF", type="secondary"):
         with st.spinner("Building PDF..."):
-            # Save Photo
             photo_filename = "photo.jpg"
             if uploaded_photo:
-                with open(photo_filename, "wb") as f:
-                    f.write(uploaded_photo.getbuffer())
-            elif os.path.exists(photo_filename):
-                os.remove(photo_filename)
-
-            # Build
+                with open(photo_filename, "wb") as f: f.write(uploaded_photo.getbuffer())
+            elif os.path.exists(photo_filename): os.remove(photo_filename)
             pdf_bytes = build_pdf(st.session_state.generated_content, style_choice, photo_path=photo_filename if uploaded_photo else None)
-            
-            # Download
             safe_title = re.sub(r'[^a-zA-Z0-9]', '_', job_desc[:20]) if job_desc else "Resume"
             st.success("PDF Ready!")
-            st.download_button(
-                label="📥 Download PDF",
-                data=pdf_bytes,
-                file_name=f"CV_{style_choice}_{safe_title}.pdf",
-                mime="application/pdf"
-            )
+            st.download_button(label="📥 Download PDF", data=pdf_bytes, file_name=f"CV_{style_choice}_{safe_title}.pdf", mime="application/pdf")
