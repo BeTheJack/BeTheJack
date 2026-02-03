@@ -12,13 +12,12 @@ from PIL import Image, ImageOps, ImageDraw
 st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 
 def init_ai():
-    # Attempt to load key from Streamlit Secrets
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
         return True
     except:
-        st.error("🚨 API Key Missing. Admin: Add 'GOOGLE_API_KEY' to Streamlit Secrets.")
+        st.error("🚨 API Key Missing. Admin: Add 'GOOGLE_API_KEY' to Secrets.")
         return False
 
 # ==============================================================================
@@ -31,13 +30,28 @@ class PDF(FPDF):
             self.unifontsubset = False
 
 def get_best_model():
+    """Forces the use of modern Gemini 1.5 models to avoid 404s."""
     try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
+        # Priority: Flash (Fastest/Free-est) -> Pro (Better)
+        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro']
+        
+        # 1. Ask Google what is available
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 2. Match with priority
         for p in priorities:
-            if p in available: return p
-        return "models/gemini-pro"
-    except: return "models/gemini-pro"
+            if p in available_models:
+                return p
+        
+        # 3. Fallback: Just grab the first thing that looks like Gemini
+        for m in available_models:
+            if 'gemini' in m:
+                return m
+                
+        # 4. Hard Fallback (If listing fails entirely)
+        return "models/gemini-1.5-flash"
+    except:
+        return "models/gemini-1.5-flash"
 
 def sanitize_text(text):
     replacements = {'\u2022': '-', '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '…': '...'}
@@ -61,8 +75,8 @@ def crop_circle_image(image_path):
 # 3. CONTENT GENERATION
 # ==============================================================================
 def generate_content(raw_data, jd, style="Global"):
-    model_name = get_best_model()
-    model = genai.GenerativeModel(model_name)
+    target_model = get_best_model()
+    model = genai.GenerativeModel(target_model)
     
     if style == "India":
         visa_instruction = "Do NOT include Visa Status, Nationality, or Photo."
@@ -103,6 +117,7 @@ def generate_content(raw_data, jd, style="Global"):
         - [Cert 1]
         """
     else:
+        # GLOBAL STYLE
         visa_instruction = "Extract Visa Status and Nationality from SKELETON DATA and put in CONTACT section."
         output_structure = """
         [SIDEBAR_START]
@@ -272,7 +287,7 @@ st.markdown("### (Jack of all Trades)")
 # Connect AI
 ai_connected = init_ai()
 
-# Session State for About Me
+# Session State
 if "about_me_text" not in st.session_state:
     st.session_state.about_me_text = "NAME: \nPHONE: \nEMAIL: \nLINKEDIN: \nLOCATION: \nVISA: \nNATIONALITY: \n\nEDUCATION:\nDegree | University | Year\n\nWORK HISTORY:\nRole | Company | Dates\nRole | Company | Dates\n\nCERTIFICATIONS:\n- Cert 1"
 
@@ -284,21 +299,21 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. Your Skeleton")
     
-    # === NEW: LOAD BUTTON IN MAIN UI ===
+    # LOAD BUTTON
     with st.expander("📂 Click to Load Saved Profile"):
         uploaded_file = st.file_uploader("Upload Profile (JSON)", type=["json", "txt"], label_visibility="collapsed")
         if uploaded_file is not None:
             try:
                 data = json.load(uploaded_file)
                 st.session_state.about_me_text = data.get("about_me", "")
-                st.success("✅ Profile Loaded! Check the box below.")
+                st.success("✅ Profile Loaded!")
             except:
                 st.error("Invalid file.")
 
-    # TEXT AREA (Linked to Session State)
+    # TEXT AREA
     about_me = st.text_area("Details", value=st.session_state.about_me_text, height=300, key="about_me_input")
     
-    # Sync manual edits
+    # Sync edits
     if about_me != st.session_state.about_me_text:
         st.session_state.about_me_text = about_me
 
