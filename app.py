@@ -7,7 +7,7 @@ import json
 from PIL import Image, ImageOps, ImageDraw
 
 # ==============================================================================
-# 1. SETUP & SECURITY (No Hardcoded Keys)
+# 1. SETUP & SECURITY
 # ==============================================================================
 st.set_page_config(page_title="BeTheJack", page_icon="🃏", layout="wide")
 
@@ -33,7 +33,6 @@ class PDF(FPDF):
 def get_best_model():
     try:
         available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Prefer faster/newer models
         priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
         for p in priorities:
             if p in available: return p
@@ -104,7 +103,6 @@ def generate_content(raw_data, jd, style="Global"):
         - [Cert 1]
         """
     else:
-        # GLOBAL STYLE
         visa_instruction = "Extract Visa Status and Nationality from SKELETON DATA and put in CONTACT section."
         output_structure = """
         [SIDEBAR_START]
@@ -274,41 +272,39 @@ st.markdown("### (Jack of all Trades)")
 # Connect AI
 ai_connected = init_ai()
 
-if "generated_content" not in st.session_state: st.session_state.generated_content = ""
-# Default Skeleton
-default_about = "NAME: \nPHONE: \nEMAIL: \nLINKEDIN: \nLOCATION: \nVISA: \nNATIONALITY: \n\nEDUCATION:\nDegree | University | Year\n\nWORK HISTORY:\nRole | Company | Dates\nRole | Company | Dates\n\nCERTIFICATIONS:\n- Cert 1"
+# Session State for About Me
+if "about_me_text" not in st.session_state:
+    st.session_state.about_me_text = "NAME: \nPHONE: \nEMAIL: \nLINKEDIN: \nLOCATION: \nVISA: \nNATIONALITY: \n\nEDUCATION:\nDegree | University | Year\n\nWORK HISTORY:\nRole | Company | Dates\nRole | Company | Dates\n\nCERTIFICATIONS:\n- Cert 1"
 
-# === PROFILE MANAGER (SAVE/LOAD) ===
-with st.sidebar:
-    st.header("💾 My Identity")
-    st.info("Save your details to your computer so you don't have to type them every time.")
-    
-    # LOAD
-    uploaded_file = st.file_uploader("📂 Load Profile", type="json")
-    if uploaded_file is not None:
-        try:
-            data = json.load(uploaded_file)
-            st.session_state['about_me_content'] = data.get("about_me", default_about)
-            st.success("Profile Loaded!")
-        except:
-            st.error("Invalid file.")
-            
-    # Initialize session state for text area if not exists
-    if 'about_me_content' not in st.session_state:
-        st.session_state['about_me_content'] = default_about
+if "generated_content" not in st.session_state:
+    st.session_state.generated_content = ""
 
 # INPUTS
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. Your Skeleton")
     
-    # SAVE BUTTON (Downloads JSON)
-    profile_data = json.dumps({"about_me": st.session_state['about_me_content']})
-    st.download_button("💾 Save Profile", data=profile_data, file_name="my_profile.json", mime="application/json", help="Download your details to use later.")
+    # === NEW: LOAD BUTTON IN MAIN UI ===
+    with st.expander("📂 Click to Load Saved Profile"):
+        uploaded_file = st.file_uploader("Upload Profile (JSON)", type=["json", "txt"], label_visibility="collapsed")
+        if uploaded_file is not None:
+            try:
+                data = json.load(uploaded_file)
+                st.session_state.about_me_text = data.get("about_me", "")
+                st.success("✅ Profile Loaded! Check the box below.")
+            except:
+                st.error("Invalid file.")
+
+    # TEXT AREA (Linked to Session State)
+    about_me = st.text_area("Details", value=st.session_state.about_me_text, height=300, key="about_me_input")
     
-    about_me = st.text_area("About Me", value=st.session_state['about_me_content'], height=300, key="about_input")
-    # Sync manual edits back to session state for saving
-    st.session_state['about_me_content'] = about_me
+    # Sync manual edits
+    if about_me != st.session_state.about_me_text:
+        st.session_state.about_me_text = about_me
+
+    # SAVE BUTTON
+    profile_json = json.dumps({"about_me": st.session_state.about_me_text})
+    st.download_button("💾 Save This Profile", data=profile_json, file_name="my_profile.json", mime="application/json")
 
 with col2:
     st.subheader("2. Target Job")
@@ -326,7 +322,7 @@ if st.button("STEP 1: GENERATE DRAFT", type="primary"):
     elif not ai_connected: st.error("AI not connected. Check Secrets.")
     else:
         with st.spinner("Hallucinating new identity..."):
-            st.session_state.generated_content = generate_content(about_me, job_desc, style=style_choice)
+            st.session_state.generated_content = generate_content(st.session_state.about_me_text, job_desc, style=style_choice)
             st.success("Draft Generated!")
 
 if st.session_state.generated_content:
