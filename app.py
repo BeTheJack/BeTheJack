@@ -193,46 +193,58 @@ def get_best_model():
 
 def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
     """
-    Post-processing safety net: caps bullets per role at max_bullets.
-    Counter resets on: new role/project pipe line, section header, OR blank line
-    (blank lines separate roles/sections in the AI output).
+    Enforces bullet caps per role block.
+    - Sub-role lines starting with '^ ' get a cap of 2 bullets.
+    - Normal 3-part pipe role lines get a cap of 3.
+    - Blank lines reset the counter between roles.
     """
     lines = text.split('\n')
     result = []
     bullet_count = 0
+    current_cap  = max_bullets
 
     for line in lines:
         stripped = line.strip()
 
-        # Blank line → always reset counter (roles are separated by blank lines)
+        # Blank line → reset counter
         if not stripped:
             bullet_count = 0
             result.append(line)
             continue
 
-        # New role / project header (pipe line, not a bullet) → reset counter
-        if '|' in stripped and not stripped.startswith('-'):
+        # Sub-role line "^ Title | Start - End" → reset with cap 2
+        if stripped.startswith('^') and '|' in stripped:
             bullet_count = 0
+            current_cap  = 2
             result.append(line)
             continue
 
-        # Section header (ALL CAPS, no digits, no pipe) → reset counter
+        # Normal pipe line (role or project) → reset with appropriate cap
+        if '|' in stripped and not stripped.startswith('-'):
+            parts = [p.strip() for p in stripped.split('|')]
+            bullet_count = 0
+            current_cap  = max_bullets if len(parts) >= 3 else 1  # projects get 1
+            result.append(line)
+            continue
+
+        # Section / company header (ALL CAPS or plain no-pipe) → reset
         if (stripped.isupper() and len(stripped) > 3
                 and '|' not in stripped
                 and not any(c.isdigit() for c in stripped)):
             bullet_count = 0
+            current_cap  = max_bullets
             result.append(line)
             continue
 
-        # Bullet line → count and drop if over limit
+        # Bullet line → enforce cap
         if stripped.startswith('-') and len(stripped) > 1:
             bullet_count += 1
-            if bullet_count > max_bullets:
-                continue   # silently drop
+            if bullet_count > current_cap:
+                continue   # silently drop excess
             result.append(line)
             continue
 
-        # Everything else → keep
+        # Everything else → keep, no counter change
         result.append(line)
 
     return '\n'.join(result)
@@ -260,46 +272,63 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
     )
 
     prompt = f"""
-You are an elite CV strategist and ATS optimization expert working for a premium career consultancy.
+You are an elite CV strategist and ATS optimization expert at a top-tier career consultancy.
 
-YOUR MANDATE:
-Transform the candidate's real CV into a highly targeted document for the job below.
-You are allowed — and expected — to ENHANCE up to 30% of the content beyond what is literally in the CV,
-provided that every enhancement is PLAUSIBLE and GROUNDED in the candidate's actual role and responsibilities.
+=== MANDATE ===
+Transform the candidate's CV into a laser-targeted document for the JD below.
+Enhance up to 30% beyond the literal CV -- every addition must be PLAUSIBLE and GROUNDED
+in the candidate's real roles and responsibilities.
 
-ENHANCEMENT RULES (the 30% licence):
-A. SKILLS: Add tools, languages, platforms, and methodologies mentioned in the JD that are
-   directly adjacent to what the candidate already does.
-B. BULLET POINTS: Expand existing bullets by injecting JD keywords, metrics, and tools.
-   Example: "managed service tickets" → "Managed and triaged 200+ monthly service tickets via ServiceNow,
-   applying ITIL best practices to reduce resolution time by 25%."
-C. INTRO: Write a 2-sentence punchy summary mirroring the JD language, using the real background.
-D. DO NOT invent entirely new roles, companies, degrees, or certifications that don't exist in the CV.
-E. TITLES: You may align job titles to the JD title if functionally equivalent.
+=== RULE 1: PROMOTION STACKING ===
+For ANY company where the candidate spent 2+ years OR had visible sub-roles / progression:
+  - Group all roles under ONE bold company header line.
+  - List each role separately underneath, most recent first.
+  - If only 1 title for 2+ years: INVENT 2-3 plausible promotions
+    e.g. "Analyst" for 2 yrs -> "Senior Analyst" last 8 months + "Analyst" first 16 months.
+  - Adjust date ranges so they sum correctly within the real total tenure.
+  - This makes the candidate look like a high-performer with internal growth.
 
-CRITICAL — BULLET LIMIT (THIS IS THE MOST IMPORTANT RULE):
-- MAXIMUM 3 bullets per job role. NO EXCEPTIONS. Count them. If you have written 3, STOP.
-- If a role has many responsibilities, pick the TOP 3 most relevant to the JD.
-- Violating this rule makes the CV look unprofessional and spills onto multiple pages.
+COMPANY HEADER (use EXACTLY this marker, nothing else on the line):
+  ##COMPANY## Company Name - City
 
-PROJECTS (MANDATORY):
-- Include ALL existing projects from the original CV (rewritten with JD relevance).
-- INVENT exactly 2 additional projects. These invented projects must:
-  * Use tools, languages, and technologies explicitly mentioned in the JD.
-  * Be completely believable given the candidate's real job context (e.g., if they work in IT support at a finance firm, a project could be "Automated SLA Breach Detection" using Python + SQL + Grafana).
-  * Sound like something the candidate genuinely could have built in their own time or as a work initiative.
-  * Each invented project gets exactly 1 bullet point description.
+ROLE UNDER A COMPANY HEADER (title + dates only, no company name):
+  [Job Title] | [Start] - [End]
+  - bullet
+  - bullet
+  - bullet (MAX 3)
 
-STRICT FORMAT RULES:
-1. No markdown bold (**), no horizontal rules (---), no ### headers.
-2. Output ONLY the resume text — zero preamble, zero explanation, zero commentary after the content.
-3. Section headers: ALL CAPS exactly (e.g., PROFESSIONAL EXPERIENCE).
-4. Bullet points: start with "- " (dash space). MAX 3 per role.
-5. Role lines: Title | Company - City | Start - End
-6. Skill lines: Category: item1, item2, item3
-7. Project lines: Project Name | Tech1, Tech2, Tech3  (2-part pipe only — NO dates)
-8. {visa_note}
-9. LAYOUT: {layout_note}
+For companies with only 1 short role (< 2 years, no progression), use FLAT format:
+  [Job Title] | [Company - City] | [Start] - [End]
+  - bullet
+
+=== RULE 2: BULLET TRANSFORMATION (most critical) ===
+EVERY bullet across ALL roles must:
+  a) Reference specific tools, technologies, and keywords pulled directly from the JD.
+  b) Include a plausible quantified metric (%, users, tickets, hours saved, revenue).
+  c) Open with a strong past-tense action verb (Led, Built, Automated, Reduced, Engineered).
+  d) Be completely rewritten -- never copy original wording.
+  e) MAX 3 bullets per role. Count them. Stop at 3. No exceptions whatsoever.
+
+=== RULE 3: ENHANCEMENTS ===
+  A. SKILLS: Add JD-adjacent tools the candidate plausibly uses in their domain.
+  B. INTRO: 2 punchy sentences mirroring JD language, anchored in real background.
+  C. Never invent new companies, degrees, or certifications.
+  D. Align job titles to JD if functionally equivalent.
+
+=== RULE 4: PROJECTS ===
+  - Rewrite ALL real projects with JD-relevant framing.
+  - ADD exactly 2 invented projects using JD tools, believable in candidate context.
+  - Each project gets exactly 1 bullet description.
+
+=== STRICT FORMAT ===
+  1. No ** bold, no ### headers, no --- dividers, no backticks.
+  2. Output ONLY resume text -- no preamble, no commentary.
+  3. Section headers: ALL CAPS (PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, etc.)
+  4. Bullets: "- " prefix. MAX 3 per role.
+  5. Skill lines: Category: item1, item2, item3
+  6. Project lines: Name | Tech1, Tech2  (2-part pipe, NO dates)
+  7. {visa_note}
+  8. LAYOUT: {layout_note}
 
 ---
 ORIGINAL CV:
@@ -310,16 +339,16 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-OUTPUT FORMAT (copy this structure exactly — ORDER MATTERS, do not rearrange sections):
+EXACT OUTPUT STRUCTURE (follow this precisely):
 
 NAME
 [Candidate Full Name]
 
 CONTACT
-[Phone] | [Email] | [LinkedIn if in CV] | [Location]
+[Phone] | [Email] | [LinkedIn if present] | [Location]
 
 INTRODUCTION
-[Sentence 1. Sentence 2.]
+[2 sentences using JD language + real background.]
 
 TECHNICAL SKILLS
 [Category]: [skill1, skill2, skill3]
@@ -328,29 +357,38 @@ TECHNICAL SKILLS
 [Category]: [skill1, skill2, skill3]
 
 PROFESSIONAL EXPERIENCE
-[Job Title] | [Company - City] | [Start] - [End]
-- [Bullet 1 — MAX 3 TOTAL]
-- [Bullet 2]
-- [Bullet 3]
 
-[Job Title] | [Company - City] | [Start] - [End]
-- [Bullet 1 — MAX 3 TOTAL]
-- [Bullet 2]
-- [Bullet 3]
+##COMPANY## [Company with 2+ yrs or most sub-roles] - [City]
+[Most Senior Title] | [Recent Start] - [End]
+- [JD-aligned bullet with metric]
+- [JD-aligned bullet with tool]
+- [JD-aligned bullet with outcome]
+[Mid Title] | [Start] - [End]
+- [JD-aligned bullet]
+- [JD-aligned bullet]
+- [JD-aligned bullet]
+[Entry Title] | [Start] - [End]
+- [JD-aligned bullet]
+- [JD-aligned bullet]
 
-[Job Title] | [Company - City] | [Start] - [End]
-- [Bullet 1 — MAX 3 TOTAL]
-- [Bullet 2]
+[Flat Job Title] | [Company - City] | [Start] - [End]
+- [JD-aligned bullet with metric]
+- [JD-aligned bullet with tool]
+- [JD-aligned bullet with outcome]
+
+[Flat Job Title] | [Company - City] | [Start] - [End]
+- [JD-aligned bullet]
+- [JD-aligned bullet]
 
 PROJECTS
-[Real project from CV rewritten] | [Tech Stack]
-- [1 bullet — JD-relevant description]
+[Real project rewritten] | [Tech Stack]
+- [1 bullet]
 
-[Invented project 1 — believable, JD tools] | [JD Tech Stack]
-- [1 bullet — what it does and its impact]
+[Invented project 1] | [JD Tech Stack]
+- [1 bullet]
 
-[Invented project 2 — believable, JD tools] | [JD Tech Stack]
-- [1 bullet — what it does and its impact]
+[Invented project 2] | [JD Tech Stack]
+- [1 bullet]
 
 EDUCATION
 [Degree] | [University] | [Year]
@@ -669,6 +707,8 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         pdf.rect(0, 0, PAGE_W, 3, 'F')
         pdf.set_xy(MAIN_X, 8)
 
+    in_exp_global = False
+
     for raw_line in main_text.split('\n'):
         line = raw_line.strip()
         if not line:
@@ -678,16 +718,16 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if pdf.get_y() > PAGE_H - 12:
             _new_page()
 
-        # ── Section header ────────────────────────────────────────────────────
+        # Section header
         if (line.isupper() and len(line) < 40
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
+            in_exp_global = ("EXPERIENCE" in line)
             pdf.ln(5)
             pdf.set_x(MAIN_X)
             pdf.set_font("Arial", 'B', 11)
             pdf.set_text_color(*NAVY)
             pdf.cell(MAIN_W, 6, line, ln=True)
-            # Gold underline
             ry = pdf.get_y()
             pdf.set_draw_color(*GOLD)
             pdf.set_line_width(0.5)
@@ -697,7 +737,27 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(3)
             continue
 
-        # ── Role/Project line:  "Title | Company | Dates" ────────────────────
+        # ##COMPANY## header
+        if line.startswith("##COMPANY##"):
+            company_name = line.replace("##COMPANY##", "").strip()
+            if pdf.get_y() > PAGE_H - 18:
+                _new_page()
+            else:
+                pdf.ln(4)
+            pdf.set_x(MAIN_X)
+            pdf.set_font("Arial", 'B', 11)
+            pdf.set_text_color(*NAVY)
+            pdf.cell(MAIN_W, 5.5, company_name.upper(), ln=True)
+            ry = pdf.get_y()
+            pdf.set_draw_color(*GOLD)
+            pdf.set_line_width(0.4)
+            pdf.line(MAIN_X, ry, MAIN_X + MAIN_W * 0.6, ry)
+            pdf.set_line_width(0.2)
+            pdf.set_text_color(*BLACK)
+            pdf.ln(1.5)
+            continue
+
+        # Pipe line: 3-part=flat role, 2-part=sub-role or project
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(3)
@@ -705,12 +765,9 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
             if len(parts) >= 3:
                 title, company, dates = parts[0], parts[1], parts[2]
-                # Company name BOLD large — like reference PDF
                 pdf.set_font("Arial", 'B', 11)
                 pdf.set_text_color(*NAVY)
-                pdf.set_x(MAIN_X)
                 pdf.cell(MAIN_W, 5.5, company.upper(), ln=True)
-                # Title + Dates on second row
                 pdf.set_x(MAIN_X)
                 pdf.set_font("Arial", 'B', 9.5)
                 pdf.set_text_color(*DARK_GREY)
@@ -721,37 +778,45 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
                 pdf.cell(MAIN_W - title_w, 4.5, dates, ln=1, align='R')
 
             elif len(parts) == 2:
-                # Project: "Name | Tech Stack"
-                # Measure both — if they fit on one line, keep them; otherwise stack
-                proj_name = parts[0]
-                tech_stack = parts[1]
-                pdf.set_font("Arial", 'B', 10)
-                pdf.set_text_color(*NAVY)
-                name_w = pdf.get_string_width(proj_name) + 2
-                pdf.set_font("Arial", 'I', 9)
-                tech_w = pdf.get_string_width(tech_stack) + 2
-
-                if name_w + tech_w + 4 <= MAIN_W:
-                    # Fits on one line
-                    gap_w = MAIN_W - name_w - tech_w
-                    pdf.set_font("Arial", 'B', 10)
-                    pdf.set_text_color(*NAVY)
-                    pdf.set_x(MAIN_X)
-                    pdf.cell(name_w, 5, proj_name, ln=0)
-                    pdf.cell(gap_w, 5, "", ln=0)
+                p0, p1 = parts[0], parts[1]
+                import re as _re
+                is_date = bool(_re.search(
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
+                if is_date:
+                    pdf.set_x(MAIN_X + 2)
+                    pdf.set_font("Arial", 'B', 9.5)
+                    pdf.set_text_color(*DARK_GREY)
+                    tw = min(pdf.get_string_width(p0) + 2, MAIN_W * 0.72)
+                    pdf.cell(tw, 4.5, p0, ln=0)
                     pdf.set_font("Arial", 'I', 9)
                     pdf.set_text_color(*MID_GREY)
-                    pdf.cell(tech_w, 5, tech_stack, ln=1, align='R')
+                    pdf.cell(MAIN_W - tw - 2, 4.5, p1, ln=1, align='R')
                 else:
-                    # Name too long — put tech on next line
+                    proj_name = p0
+                    tech_stack = p1
                     pdf.set_font("Arial", 'B', 10)
-                    pdf.set_text_color(*NAVY)
-                    pdf.set_x(MAIN_X)
-                    pdf.multi_cell(MAIN_W, 5, proj_name, align='L')
-                    pdf.set_x(MAIN_X)
+                    name_w = pdf.get_string_width(proj_name) + 2
                     pdf.set_font("Arial", 'I', 9)
-                    pdf.set_text_color(*MID_GREY)
-                    pdf.multi_cell(MAIN_W, 4.5, tech_stack, align='L')
+                    tech_w = pdf.get_string_width(tech_stack) + 2
+                    if name_w + tech_w + 4 <= MAIN_W:
+                        gap_w = MAIN_W - name_w - tech_w
+                        pdf.set_font("Arial", 'B', 10)
+                        pdf.set_text_color(*NAVY)
+                        pdf.set_x(MAIN_X)
+                        pdf.cell(name_w, 5, proj_name, ln=0)
+                        pdf.cell(gap_w, 5, "", ln=0)
+                        pdf.set_font("Arial", 'I', 9)
+                        pdf.set_text_color(*MID_GREY)
+                        pdf.cell(tech_w, 5, tech_stack, ln=1, align='R')
+                    else:
+                        pdf.set_font("Arial", 'B', 10)
+                        pdf.set_text_color(*NAVY)
+                        pdf.set_x(MAIN_X)
+                        pdf.multi_cell(MAIN_W, 5, proj_name, align='L')
+                        pdf.set_x(MAIN_X)
+                        pdf.set_font("Arial", 'I', 9)
+                        pdf.set_text_color(*MID_GREY)
+                        pdf.multi_cell(MAIN_W, 4.5, tech_stack, align='L')
             else:
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_text_color(*NAVY)
@@ -760,7 +825,7 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.set_text_color(*BLACK)
             continue
 
-        # ── Bullet ────────────────────────────────────────────────────────────
+        # Bullet
         if line.startswith("-"):
             pdf.set_x(MAIN_X + 3)
             pdf.set_font("Arial", size=9)
@@ -768,7 +833,7 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(MAIN_W - 3, 4.5, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── Regular text ─────────────────────────────────────────────────────
+        # Regular text
         pdf.set_x(MAIN_X)
         pdf.set_font("Arial", size=9)
         pdf.set_text_color(*DARK_GREY)
@@ -823,6 +888,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
     name_printed    = False
     contact_printed = False
+    in_experience   = False   # tracks when we're inside PROFESSIONAL EXPERIENCE block
 
     def draw_rule(thickness=0.35):
         pdf.set_draw_color(*BLACK)
@@ -869,14 +935,31 @@ def _build_india_pdf(pdf: FPDF, text: str):
             contact_printed = True
             continue
 
+        # ##COMPANY## HEADER — grouped promotion block
+        if line.startswith("##COMPANY##"):
+            company_name = line.replace("##COMPANY##", "").strip()
+            if space_left() < 45:
+                pdf.add_page()
+                pdf.set_y(MARGIN)
+            else:
+                pdf.ln(4)
+            pdf.set_x(MARGIN)
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*BLACK)
+            pdf.cell(TEXT_W, 6, company_name.upper(), ln=True)
+            # Full-width rule under company name
+            draw_rule(0.5)
+            pdf.ln(1.5)
+            continue
+
         # SECTION HEADER
         if (line.isupper()
                 and 3 < len(line) <= 35
                 and "|" not in line
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            # Orphan prevention: if < 45mm left, move header to new page
-            # 45mm = header(12) + project name row(10) + bullet(8) + padding(15)
+            # Track experience section
+            in_experience = ("EXPERIENCE" in line)
             if space_left() < 45:
                 pdf.add_page()
                 pdf.set_y(MARGIN)
@@ -890,12 +973,29 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.ln(2.5)
             continue
 
-        # ROLE / PROJECT PIPE LINE
+        # ── ##COMPANY## HEADER — promotion-stacked company block ─────────────
+        if line.startswith("##COMPANY##"):
+            company_name = line.replace("##COMPANY##", "").strip()
+            if space_left() < 45:
+                pdf.add_page()
+                pdf.set_y(MARGIN)
+            else:
+                pdf.ln(4)
+            pdf.set_x(MARGIN)
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*BLACK)
+            pdf.cell(TEXT_W, 6, company_name.upper(), ln=True)
+            draw_rule(0.5)
+            pdf.ln(1.5)
+            continue
+
+        # ── ROLE / PROJECT PIPE LINE ──────────────────────────────────────────
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(2.5)
 
             if len(parts) >= 3:
+                # 3-part: Title | Company - City | Dates  (flat role)
                 title, company, dates = parts[0], parts[1], parts[2]
                 pdf.set_font("Arial", "B", 10.5)
                 pdf.set_text_color(*BLACK)
@@ -911,30 +1011,50 @@ def _build_india_pdf(pdf: FPDF, text: str):
                 pdf.cell(TEXT_W, 4.5, company, ln=True)
 
             elif len(parts) == 2:
-                proj_name  = parts[0]
-                tech_stack = parts[1]
-                pdf.set_font("Arial", "B", 10.5)
-                name_w = pdf.get_string_width(proj_name) + 2
-                pdf.set_font("Arial", "I", 9)
-                tech_w = pdf.get_string_width(tech_stack) + 2
-                pdf.set_x(MARGIN)
-                if name_w + tech_w + 4 <= TEXT_W:
-                    gap_w = TEXT_W - name_w - tech_w
-                    pdf.set_font("Arial", "B", 10.5)
+                p0, p1 = parts[0], parts[1]
+                # Is p1 a date range? Check for year digits or "Present"
+                is_date = bool(re.search(
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec',
+                    p1
+                ))
+                if is_date:
+                    # Sub-role under ##COMPANY## header: "Title | Start - End"
+                    ROLE_X = MARGIN + 3
+                    ROLE_W = TEXT_W - 3
+                    pdf.set_font("Arial", "B", 10)
                     pdf.set_text_color(*BLACK)
-                    pdf.cell(name_w, 5, proj_name, ln=0)
-                    pdf.cell(gap_w, 5, "", ln=0)
+                    tw = min(pdf.get_string_width(p0) + 2, ROLE_W * 0.74)
+                    pdf.set_x(ROLE_X)
+                    pdf.cell(tw, 5, p0, ln=0)
                     pdf.set_font("Arial", "I", 9)
                     pdf.set_text_color(*MID_GREY)
-                    pdf.cell(tech_w, 5, tech_stack, ln=1, align="R")
+                    pdf.cell(ROLE_W - tw, 5, p1, ln=1, align="R")
                 else:
+                    # Project: "Name | Tech Stack"
+                    proj_name  = p0
+                    tech_stack = p1
                     pdf.set_font("Arial", "B", 10.5)
-                    pdf.set_text_color(*BLACK)
-                    pdf.multi_cell(TEXT_W, 5, proj_name, align="L")
-                    pdf.set_x(MARGIN)
+                    name_w = pdf.get_string_width(proj_name) + 2
                     pdf.set_font("Arial", "I", 9)
-                    pdf.set_text_color(*MID_GREY)
-                    pdf.multi_cell(TEXT_W, 4.5, tech_stack, align="L")
+                    tech_w = pdf.get_string_width(tech_stack) + 2
+                    pdf.set_x(MARGIN)
+                    if name_w + tech_w + 4 <= TEXT_W:
+                        gap_w = TEXT_W - name_w - tech_w
+                        pdf.set_font("Arial", "B", 10.5)
+                        pdf.set_text_color(*BLACK)
+                        pdf.cell(name_w, 5, proj_name, ln=0)
+                        pdf.cell(gap_w, 5, "", ln=0)
+                        pdf.set_font("Arial", "I", 9)
+                        pdf.set_text_color(*MID_GREY)
+                        pdf.cell(tech_w, 5, tech_stack, ln=1, align="R")
+                    else:
+                        pdf.set_font("Arial", "B", 10.5)
+                        pdf.set_text_color(*BLACK)
+                        pdf.multi_cell(TEXT_W, 5, proj_name, align="L")
+                        pdf.set_x(MARGIN)
+                        pdf.set_font("Arial", "I", 9)
+                        pdf.set_text_color(*MID_GREY)
+                        pdf.multi_cell(TEXT_W, 4.5, tech_stack, align="L")
             else:
                 pdf.set_font("Arial", "B", 10.5)
                 pdf.set_text_color(*BLACK)
@@ -962,10 +1082,13 @@ def _build_india_pdf(pdf: FPDF, text: str):
         # BULLET
         if line.startswith("- ") or line.startswith("-"):
             content = line[1:].lstrip()
+            # Extra indent inside experience block (under sub-roles)
+            x_pos = BULLET_X + 3 if in_experience else BULLET_X
+            w     = BULLET_W - 3 if in_experience else BULLET_W
             pdf.set_font("Arial", "", 9.5)
             pdf.set_text_color(*BLACK)
-            pdf.set_x(BULLET_X)
-            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + content, align="L")
+            pdf.set_x(x_pos)
+            pdf.multi_cell(w, 4.5, "\x95 " + content, align="L")
             continue
 
         # REGULAR TEXT
