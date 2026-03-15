@@ -193,8 +193,8 @@ def get_best_model():
 
 def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> str:
     """
-    Takes REAL extracted CV text and the target JD.
-    Returns a tailored version — no fabrication, only rewording/reprioritising.
+    Takes real extracted CV text and the target JD.
+    Returns a tailored, enhanced version with up to 30% JD-driven augmentation.
     """
     model = genai.GenerativeModel(get_best_model())
 
@@ -213,21 +213,37 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
     )
 
     prompt = f"""
-You are a professional CV consultant and expert ATS optimizer.
+You are an elite CV strategist and ATS optimization expert working for a premium career consultancy.
 
-YOUR STRICT RULES:
-1. **NO FABRICATION** — every fact, date, company, role, skill, and achievement must come directly from the ORIGINAL CV. Do not invent anything.
-2. **REWORD & REFRAME** — rewrite bullet points using keywords and language from the JD. Prioritise experience that matches the JD requirements.
-3. **REORDER** — bring the most JD-relevant skills and experiences to the top. Remove or de-emphasise irrelevant points.
-4. **SUMMARY** — write a concise 2-sentence professional summary that bridges the candidate's real background with the JD's requirements.
-5. **KEYWORDS** — naturally weave JD keywords into existing bullet points where they genuinely apply.
-6. **TITLES** — if the candidate's old title is functionally equivalent to the JD title (e.g. "Software Developer" → "Software Engineer"), you may update the title to match. Otherwise keep the original.
-7. **FORMATTING** — no markdown bold (**), no horizontal rules (---), no headers with ###.
-8. **LENGTH** — aim for a concise 1-page output.
-9. **BULLET LIMIT** — max 3 bullets per role.
-10. **VISA/PHOTO** — {visa_note}
+YOUR MANDATE:
+Transform the candidate's real CV into a highly targeted document for the job below.
+You are allowed — and expected — to ENHANCE up to 30% of the content beyond what is literally in the CV,
+provided that every enhancement is PLAUSIBLE and GROUNDED in the candidate's actual role and responsibilities.
 
-LAYOUT: {layout_note}
+ENHANCEMENT RULES (the 30% licence):
+A. SKILLS: Add tools, languages, platforms, and methodologies mentioned in the JD that are
+   directly adjacent to what the candidate already does. For example, if they use ServiceNow,
+   you may add "ITSM workflow automation". If they use Python for analysis, add relevant libraries
+   (e.g., NumPy, Matplotlib) that a person in that role would plausibly use.
+B. BULLET POINTS: Expand existing bullets by injecting JD keywords, metrics, and tools.
+   If a bullet says "managed service tickets", rewrite it as
+   "Managed and triaged 200+ monthly service tickets via ServiceNow, applying ITIL best practices
+   to reduce resolution time by 25%." — the numbers and keywords are plausible given the role.
+C. INTRO: Write a 2-sentence punchy summary that directly mirrors the JD's language,
+   using the candidate's real background as the foundation.
+D. DO NOT: Invent entirely new roles, companies, degrees, or certifications that don't exist in the CV.
+   Do not add skills that are completely unrelated to the candidate's domain.
+E. TITLES: You may align job titles to match the JD title if functionally equivalent.
+
+STRICT FORMAT RULES:
+1. No markdown bold (**), no horizontal rules (---), no ### headers.
+2. Output ONLY the structured resume text — no preamble, no explanation, no commentary.
+3. Section headers must be ALL CAPS (e.g., PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS).
+4. Bullet points start with "- " (dash space).
+5. Role lines use pipe format: Title | Company | Dates
+6. Skill lines: Category: item1, item2, item3
+7. {visa_note}
+8. LAYOUT: {layout_note}
 
 ---
 ORIGINAL CV:
@@ -238,41 +254,42 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-OUTPUT FORMAT:
+OUTPUT FORMAT (follow exactly — no deviations):
+
 NAME
-[Candidate Name]
+[Candidate Full Name]
 
 CONTACT
-[Phone] | [Email] | [LinkedIn if present] | [Location]
-[Visa/Nationality if Global style]
+[Phone] | [Email] | [LinkedIn if in CV] | [Location]
 
 INTRODUCTION
-[2-sentence tailored summary using only real background]
+[Punchy 2-sentence summary using JD language + real background]
 
 TECHNICAL SKILLS
-[Reordered skills — most JD-relevant first]
-- Category: skill1, skill2, skill3
+[Category]: [skill1, skill2, skill3]
+[Category]: [skill1, skill2, skill3]
+[Category]: [skill1, skill2, skill3]
 
 PROFESSIONAL EXPERIENCE
-[Most Recent Role Title] | [Company] | [Dates]
-- [Rewritten bullet using JD keywords — based on real responsibility]
-- [Impact-focused bullet — real achievement reworded]
-- [Task bullet — real work reframed for JD]
+[Job Title] | [Company - City] | [Start Date] - [End Date]
+- [Enhanced bullet with JD keywords + plausible metric]
+- [Enhanced bullet with tools/technologies from JD]
+- [Enhanced bullet showing impact/ownership]
 
-[Previous Role Title] | [Company] | [Dates]
-- [Real responsibility rewritten with JD language]
-- [Real achievement reframed]
+[Job Title] | [Company - City] | [Start Date] - [End Date]
+- [Enhanced bullet]
+- [Enhanced bullet]
+
+PROJECTS
+[Project Name] | [Tech Stack — enhanced with JD-adjacent tools]
+- [Enhanced project description with JD-relevant outcomes]
 
 EDUCATION
-[Degree], [University] | [Year]
+[Degree] | [University] | [Year]
 
 CERTIFICATIONS
-- [Real cert 1]
-- [Real cert 2 if any]
-
-PROJECTS (if any in original CV)
-[Project Name] | [Tech Stack from CV]
-- [Real project description rewritten to highlight JD relevance]
+- [Cert 1]
+- [Cert 2]
 """
 
     try:
@@ -381,25 +398,33 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         sidebar_text = text[:idx].strip()
         main_text    = text[idx:].strip()
 
+    SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
+
     # ════════════════════════════════════════════════════════════════════════
     # SIDEBAR
     # ════════════════════════════════════════════════════════════════════════
     cur_y = 8  # start below gold top bar
 
-    # ── Profile photo (square crop, centered in sidebar) ─────────────────────
+    # ── Profile photo — CIRCLE crop, centered in sidebar ─────────────────────
     if photo_path and os.path.exists(photo_path):
-        # Square crop (not circle) to match reference style
         try:
-            img = Image.open(photo_path).convert("RGB")
+            img  = Image.open(photo_path).convert("RGBA")
             size = min(img.size)
-            img  = ImageOps.fit(img, (size, size), centering=(0.5, 0.3))
-            sq_path = "temp_sq_photo.jpg"
-            img.save(sq_path, "JPEG", quality=92)
-            # Center photo horizontally in sidebar
+            img  = ImageOps.fit(img, (size, size), centering=(0.5, 0.25))
+            # Create circular mask
+            mask = Image.new('L', (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+            circle = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+            circle.paste(img, mask=mask)
+            # Paste on white bg (FPDF needs RGB)
+            bg = Image.new('RGB', (size, size), (18, 40, 76))  # navy bg matches sidebar
+            bg.paste(circle, mask=circle.split()[3])
+            circ_path = "temp_circle_photo.png"
+            bg.save(circ_path, "PNG")
             photo_x = (SIDEBAR_W - photo_size) / 2
-            pdf.image(sq_path, x=photo_x, y=cur_y, w=photo_size)
+            pdf.image(circ_path, x=photo_x, y=cur_y, w=photo_size)
             cur_y += photo_size + 4
-            try: os.remove(sq_path)
+            try: os.remove(circ_path)
             except: pass
         except Exception:
             cur_y = 8
@@ -413,10 +438,10 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
     pdf.set_xy(SIDEBAR_X, cur_y)
 
-    # Find name (first real non-header line)
+    # Find name (first non-skip, non-pipe, non-empty line in sidebar)
     name_line = next(
         (l.strip() for l in sidebar_text.split('\n')
-         if l.strip() and l.strip() != 'NAME'),
+         if l.strip() and l.strip() not in SKIP_WORDS and '|' not in l),
         ''
     )
 
@@ -427,7 +452,8 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if not line:
             pdf.set_xy(SIDEBAR_X, min(pdf.get_y() + 1.5, PAGE_H - 8))
             continue
-        if line == 'NAME':
+        # Skip AI boilerplate markers
+        if line in SKIP_WORDS:
             continue
 
         # ── Name ─────────────────────────────────────────────────────────────
@@ -445,8 +471,10 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(4)
             continue
 
-        # ── Section header ────────────────────────────────────────────────────
-        if line.isupper() and len(line) < 30:
+        # ── Section header (ALL CAPS, not a skip word, no digits) ────────────
+        if (line.isupper() and 3 < len(line) < 30
+                and line not in SKIP_WORDS
+                and not any(c.isdigit() for c in line)):
             pdf.ln(4)
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 8)
@@ -515,7 +543,9 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             _new_page()
 
         # ── Section header ────────────────────────────────────────────────────
-        if line.isupper() and len(line) < 40:
+        if (line.isupper() and len(line) < 40
+                and line not in SKIP_WORDS
+                and not any(c.isdigit() for c in line)):
             pdf.ln(5)
             pdf.set_x(MAIN_X)
             pdf.set_font("Arial", 'B', 11)
@@ -588,25 +618,40 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
 def _build_india_pdf(pdf: FPDF, text: str):
     """
-    Jake's Resume ATS layout — faithfully reproduced.
+    Jake's Resume — production-grade ATS layout.
 
-    Fixes applied vs previous version:
-    1. Name: 20pt (was 24pt — was too large and looked amateurish)
-    2. Contact bar: auto-wraps using multi_cell so phone/email never overflows
-    3. Projects: no longer skipped — rendered identically to Experience entries
-    4. Bullets: proper • character, consistent 4mm indent
-    5. Skills: category bold inline + detail normal, fully wrapped within margin
+    ROOT CAUSE FIXES vs previous broken version:
+    - "NAME", "CONTACT", "INTRODUCTION" are SKIPPED as section keywords —
+      they are AI output artifacts that the PDF should not render as headers.
+    - Contact detection is explicit: only triggered by presence of @ or +91 / phone digits.
+    - Name detection: first non-empty line after stripping markers, regardless of case.
+    - Section headers: ALL CAPS AND length 4–35 chars AND not a skip-word AND no digits.
+    - Skills: "Category: values" detected with colon and no leading dash.
+    - Bullets: lines starting with "- ".
+    - Everything else: plain paragraph text.
+
+    LAYOUT (Jake's Resume spec):
+    - 0.5" (12.7mm) margins all sides
+    - Name: 20pt Bold, centred
+    - Contact: 9pt, centred, thin rule below
+    - Section header: 10.5pt Bold ALL CAPS, thin rule immediately below
+    - Role line: Title bold left + Dates italic right, Company italic below
+    - Bullet: 9.5pt, 4mm indent, • character
+    - Skills: Bold category inline + normal detail
     """
-    MARGIN        = 12.7         # 0.5 inch = standard Jake margin
-    PAGE_W        = 210
-    PAGE_H        = 297
-    TEXT_W        = PAGE_W - 2 * MARGIN
-    BULLET_X      = MARGIN + 4
-    BULLET_W      = TEXT_W - 4
+    MARGIN   = 12.7
+    PAGE_W   = 210
+    PAGE_H   = 297
+    TEXT_W   = PAGE_W - 2 * MARGIN     # 184.6 mm
+    BULLET_X = MARGIN + 4
+    BULLET_W = TEXT_W - 4
 
-    BLACK         = (0,   0,   0)
-    DARK_GREY     = (50,  50,  50)
-    MID_GREY      = (100, 100, 100)
+    BLACK     = (0,   0,   0)
+    DARK_GREY = (50,  50,  50)
+    MID_GREY  = (110, 110, 110)
+
+    # Words that look like ALL-CAPS headers but are AI boilerplate — skip them
+    SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
 
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
@@ -614,102 +659,120 @@ def _build_india_pdf(pdf: FPDF, text: str):
     pdf.set_y(MARGIN)
 
     text  = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
-    lines = text.split('\n')
+    lines = [l.rstrip() for l in text.split('\n')]
 
-    # Pre-pass: identify name (first real non-empty, non-header line)
-    name_line = next(
-        (l.strip() for l in lines
-         if l.strip() and l.strip() != "NAME" and not l.strip().isupper()),
-        ""
-    )
-    name_done    = False
-    contact_done = False
+    # ── Pre-pass: identify name and contact lines ─────────────────────────────
+    # Name = first non-empty line that is NOT a skip word and NOT a pipe line
+    name_line = ""
+    for l in lines:
+        s = l.strip()
+        if s and s not in SKIP_WORDS and "|" not in s and not s.startswith("-"):
+            name_line = s
+            break
 
-    def draw_rule():
-        """Thin full-width rule under section headers."""
+    # Contact = first line containing @ or starting with + or 7–10 consecutive digits
+    contact_line = ""
+    for l in lines:
+        s = l.strip()
+        if "@" in s or s.startswith("+") or re.search(r'\d{7,}', s):
+            if s != name_line:
+                contact_line = s
+                break
+
+    name_printed    = False
+    contact_printed = False
+
+    def draw_rule(thickness=0.35):
         pdf.set_draw_color(*BLACK)
-        pdf.set_line_width(0.35)
+        pdf.set_line_width(thickness)
         pdf.line(MARGIN, pdf.get_y(), MARGIN + TEXT_W, pdf.get_y())
         pdf.set_line_width(0.2)
 
     for raw_line in lines:
         line = raw_line.strip()
 
+        # ── Page limit ────────────────────────────────────────────────────────
         if pdf.get_y() > PAGE_H - MARGIN - 3:
-            break   # hard 1-page limit
+            break
 
-        if not line or line == "NAME":
-            if line == "" and name_done:
-                pdf.ln(1.2)
+        # ── Skip blank lines (small spacing) ──────────────────────────────────
+        if not line:
+            if name_printed:
+                pdf.ln(1.0)
+            continue
+
+        # ── Skip boilerplate words ─────────────────────────────────────────────
+        if line in SKIP_WORDS:
             continue
 
         # ── NAME ──────────────────────────────────────────────────────────────
-        if not name_done and line == name_line:
-            pdf.set_font("Arial", 'B', 20)       # 20pt — professional, not oversized
+        if not name_printed and line == name_line:
+            pdf.set_font("Arial", 'B', 20)
             pdf.set_text_color(*BLACK)
             pdf.set_x(MARGIN)
             pdf.cell(TEXT_W, 9, line, ln=True, align='C')
-            name_done = True
+            name_printed = True
             continue
 
-        # ── CONTACT BAR (immediately after name) ─────────────────────────────
-        # Use multi_cell so long lines wrap instead of overflowing
-        if name_done and not contact_done:
-            if "|" in line or "@" in line or "+" in line or any(c.isdigit() for c in line[:6]):
-                pdf.set_font("Arial", '', 9)
-                pdf.set_text_color(*DARK_GREY)
-                pdf.set_x(MARGIN)
-                pdf.multi_cell(TEXT_W, 4.5, line, align='C')
-                # Thin separator line
-                pdf.set_draw_color(*DARK_GREY)
-                pdf.set_line_width(0.3)
-                pdf.line(MARGIN, pdf.get_y() + 1, MARGIN + TEXT_W, pdf.get_y() + 1)
-                pdf.set_line_width(0.2)
-                pdf.ln(3)
-                contact_done = True
-                continue
+        # ── CONTACT ───────────────────────────────────────────────────────────
+        if name_printed and not contact_printed and line == contact_line:
+            pdf.set_font("Arial", '', 9)
+            pdf.set_text_color(*DARK_GREY)
+            pdf.set_x(MARGIN)
+            pdf.multi_cell(TEXT_W, 4.5, line, align='C')
+            # thin rule below contact
+            pdf.set_draw_color(*MID_GREY)
+            pdf.set_line_width(0.25)
+            pdf.line(MARGIN, pdf.get_y() + 0.5, MARGIN + TEXT_W, pdf.get_y() + 0.5)
+            pdf.set_line_width(0.2)
+            pdf.ln(3.5)
+            contact_printed = True
+            continue
 
-        # ── SECTION HEADER (ALL CAPS) ─────────────────────────────────────────
-        if line.isupper() and 2 < len(line) < 40 and "|" not in line:
+        # ── SECTION HEADER ─────────────────────────────────────────────────────
+        # ALL CAPS, 4–35 chars, no pipe, no digits, not a skip word
+        if (line.isupper()
+                and 3 < len(line) <= 35
+                and "|" not in line
+                and line not in SKIP_WORDS
+                and not any(c.isdigit() for c in line)):
             pdf.ln(5)
             pdf.set_x(MARGIN)
             pdf.set_font("Arial", 'B', 10.5)
             pdf.set_text_color(*BLACK)
             pdf.cell(TEXT_W, 5, line, ln=True, align='L')
-            draw_rule()
+            draw_rule(0.35)
             pdf.ln(2.5)
             continue
 
-        # ── ROLE / PROJECT LINE  "Title | Company | Dates"  ──────────────────
+        # ── ROLE / PROJECT PIPE LINE  "Title | Company | Dates" ──────────────
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
-            pdf.ln(3)
-            pdf.set_x(MARGIN)
+            pdf.ln(2.5)
 
             if len(parts) >= 3:
                 title, company, dates = parts[0], parts[1], parts[2]
-                # Row 1: Title bold (left) + Dates italic (right)
+                # Row 1: title bold (left) + dates italic (right)
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
-                # Dynamic title width — never > 72% of text width
-                tw = min(pdf.get_string_width(title) + 2, TEXT_W * 0.72)
+                tw = min(pdf.get_string_width(title) + 2, TEXT_W * 0.74)
                 pdf.set_x(MARGIN)
                 pdf.cell(tw, 5, title, ln=0)
-                dw = TEXT_W - tw
                 pdf.set_font("Arial", 'I', 9.5)
                 pdf.set_text_color(*MID_GREY)
-                pdf.cell(dw, 5, dates, ln=1, align='R')
-                # Row 2: Company italic
+                pdf.cell(TEXT_W - tw, 5, dates, ln=1, align='R')
+                # Row 2: company italic grey
                 pdf.set_x(MARGIN)
                 pdf.set_font("Arial", 'I', 9.5)
                 pdf.set_text_color(*DARK_GREY)
                 pdf.cell(TEXT_W, 4.5, company, ln=True)
 
             elif len(parts) == 2:
-                # "Project | Tech Stack" — project name bold, tech italic right
+                # Project: "Name | Tech Stack"
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
-                lw = TEXT_W * 0.62
+                lw = TEXT_W * 0.60
+                pdf.set_x(MARGIN)
                 pdf.cell(lw, 5, parts[0], ln=0)
                 pdf.set_font("Arial", 'I', 9)
                 pdf.set_text_color(*MID_GREY)
@@ -717,36 +780,38 @@ def _build_india_pdf(pdf: FPDF, text: str):
             else:
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
+                pdf.set_x(MARGIN)
                 pdf.cell(TEXT_W, 5, parts[0], ln=True)
 
             pdf.set_text_color(*BLACK)
             continue
 
-        # ── BULLET POINT ──────────────────────────────────────────────────────
-        if line.startswith("-"):
-            pdf.set_font("Arial", '', 9.5)
-            pdf.set_text_color(*BLACK)
-            pdf.set_x(BULLET_X)
-            # chr(0x95) = bullet in Latin-1/cp1252
-            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + line[1:].lstrip(), align='L')
-            continue
-
-        # ── SKILL LINE  "Category: item, item" (no leading dash) ─────────────
-        if ":" in line and not line.startswith("-") and len(line) < 120:
-            cat_part, _, det_part = line.partition(":")
-            cat = cat_part.strip()
-            det = det_part.strip()
-            if cat and det:
+        # ── SKILL LINE  "Category: value, value" ─────────────────────────────
+        if ":" in line and not line.startswith("-"):
+            colon_idx = line.index(":")
+            cat = line[:colon_idx].strip()
+            det = line[colon_idx + 1:].strip()
+            # Only treat as skill if cat is short (< 5 words) and det exists
+            if cat and det and len(cat.split()) <= 5:
                 pdf.set_x(MARGIN)
                 pdf.set_font("Arial", 'B', 9.5)
                 pdf.set_text_color(*BLACK)
-                lw = min(pdf.get_string_width(cat + ": ") + 1, TEXT_W * 0.35)
+                lw = min(pdf.get_string_width(cat + ":  ") + 1, TEXT_W * 0.40)
                 pdf.cell(lw, 4.5, cat + ": ", ln=0)
                 pdf.set_font("Arial", '', 9.5)
                 pdf.multi_cell(TEXT_W - lw, 4.5, det, align='L')
                 continue
 
-        # ── REGULAR TEXT ──────────────────────────────────────────────────────
+        # ── BULLET POINT ──────────────────────────────────────────────────────
+        if line.startswith("- ") or line.startswith("-"):
+            content = line[1:].lstrip() if line.startswith("-") else line
+            pdf.set_font("Arial", '', 9.5)
+            pdf.set_text_color(*BLACK)
+            pdf.set_x(BULLET_X)
+            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + content, align='L')
+            continue
+
+        # ── REGULAR PARAGRAPH TEXT ────────────────────────────────────────────
         pdf.set_font("Arial", '', 9.5)
         pdf.set_text_color(*BLACK)
         pdf.set_x(MARGIN)
