@@ -1,7 +1,7 @@
-streamlit>=1.32.0
-google-generativeai>=0.8.0
-fpdf>=1.7.2
-Pillow>=10.0.0
-pdfplumber>=0.10.0
-pypdf>=4.0.0
-python-docx>=1.1.0
+streamlit
+groq
+fpdf
+Pillow
+pdfplumber
+pypdf
+python-docx
