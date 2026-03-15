@@ -194,8 +194,9 @@ def get_best_model():
 def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
     """
     Enforces bullet caps per role block.
-    - Sub-role lines starting with '^ ' get a cap of 2 bullets.
-    - Normal 3-part pipe role lines get a cap of 3.
+    - Sub-role 2-part pipe lines (under ##COMPANY##): cap 3.
+    - Normal 3-part pipe flat roles: cap 3.
+    - 2-part pipe project lines: cap 1.
     - Blank lines reset the counter between roles.
     """
     lines = text.split('\n')
@@ -212,22 +213,29 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
             result.append(line)
             continue
 
-        # Sub-role line "^ Title | Start - End" → reset with cap 2
-        if stripped.startswith('^') and '|' in stripped:
+        # ##COMPANY## header → reset
+        if stripped.startswith('##COMPANY##'):
             bullet_count = 0
-            current_cap  = 2
+            current_cap  = max_bullets
             result.append(line)
             continue
 
-        # Normal pipe line (role or project) → reset with appropriate cap
+        # Pipe line → determine cap by number of parts
         if '|' in stripped and not stripped.startswith('-'):
             parts = [p.strip() for p in stripped.split('|')]
             bullet_count = 0
-            current_cap  = max_bullets if len(parts) >= 3 else 1  # projects get 1
+            if len(parts) >= 3:
+                current_cap = max_bullets   # flat role: 3 bullets
+            elif len(parts) == 2:
+                # Is p1 a date? → sub-role (cap 3). Otherwise project (cap 1).
+                import re as _re
+                is_date = bool(_re.search(
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', parts[1]))
+                current_cap = max_bullets if is_date else 1
             result.append(line)
             continue
 
-        # Section / company header (ALL CAPS or plain no-pipe) → reset
+        # Section header → reset
         if (stripped.isupper() and len(stripped) > 3
                 and '|' not in stripped
                 and not any(c.isdigit() for c in stripped)):
@@ -244,9 +252,32 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
             result.append(line)
             continue
 
-        # Everything else → keep, no counter change
+        # Everything else → keep
         result.append(line)
 
+    return '\n'.join(result)
+
+
+def fix_company_markers(text: str) -> str:
+    """
+    Post-processor: normalises any AI company header variant to ##COMPANY## Name.
+    The AI produces: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY##Foo' etc.
+    All are mapped to '##COMPANY## Foo Bar - City'.
+    """
+    # Catches ALL variants: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY## Foo'
+    company_re = re.compile(
+        r'^(?:#+\s*COMPANY\s*#+\s*|#+\s*COMPANY\s*|COMPANY\s*)',
+        re.IGNORECASE
+    )
+    result = []
+    for line in text.split('\n'):
+        s = line.strip()
+        m = company_re.match(s)
+        if m:
+            name = s[m.end():].strip()
+            result.append(f'##COMPANY## {name}' if name else line)
+        else:
+            result.append(line)
     return '\n'.join(result)
 
 
@@ -295,22 +326,22 @@ For any company with 2+ years OR multiple sub-roles:
   - One ##COMPANY## line, then list roles underneath most-recent-first.
   - If only 1 title for 2+ yrs: invent 2-3 plausible internal promotions.
   - Split the real total tenure dates proportionally across invented roles.
-  - Max 2 bullets per sub-role.
+  - Each sub-role gets 2-3 bullets (NOT 1 — make it substantial).
 
 For companies with < 2 years and one role: use flat 3-part pipe. Max 3 bullets.
 
 === RULE 2: BULLET TRANSFORMATION ===
 Every bullet must: use JD keywords + specific tools, include a metric (%, users, tickets, time),
 open with past-tense action verb. Completely rewrite — never copy original wording.
-HARD LIMIT: 2 bullets per sub-role, 3 bullets per flat role. Count. Stop.
+HARD LIMIT: 3 bullets per sub-role max, 3 bullets per flat role. Count. Stop.
 
-=== RULE 3: ENHANCEMENTS ===
-Add JD-adjacent skills plausible in the candidate's domain.
-Write a punchy 2-sentence INTRO mirroring JD language anchored in real background.
-Never invent new companies, degrees, or certifications.
+=== RULE 3: SKILLS + INTRO (KEEP SHORT) ===
+Introduction: MAX 2 sentences, MAX 30 words total. Punchy, no fluff.
+Skills: MAX 4 categories, MAX 4-5 items per category. Most JD-relevant first.
+Never invent companies, degrees, or certifications.
 
 === RULE 4: PROJECTS ===
-Rewrite all real projects. Add exactly 2 invented projects using JD tools.
+Rewrite all real projects. Add exactly 2 invented ones using JD tools.
 Each project: exactly 1 bullet. Format: Name | Tech1, Tech2 (2-part pipe, NO dates).
 
 === SECTION ORDER — NEVER CHANGE THIS ORDER ===
@@ -356,10 +387,12 @@ PROFESSIONAL EXPERIENCE
 [Most Senior Role] | [Start] - [End]
 - [bullet with JD keyword + metric]
 - [bullet with JD tool + outcome]
+- [bullet with ownership/impact]
 [Mid Role] | [Start] - [End]
-- [bullet]
-- [bullet]
+- [bullet + metric]
+- [bullet + tool]
 [Junior Role] | [Start] - [End]
+- [bullet]
 - [bullet]
 
 [Flat Title] | [Company - City] | [Start] - [End]
@@ -392,7 +425,7 @@ CERTIFICATIONS
     try:
         response = model.generate_content(prompt)
         raw = response.text
-        # Safety net: enforce 3-bullet max regardless of what AI produced
+        raw = fix_company_markers(raw)
         return enforce_bullet_limit(raw, max_bullets=3)
     except Exception as e:
         return f"Error generating content: {e}"
@@ -610,49 +643,66 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         ''
     )
 
+    sidebar_intro_lines = 0   # count intro sentences rendered — cap at 2
+
     for raw_line in sidebar_text.split('\n'):
         line = raw_line.strip()
         if pdf.get_y() > PAGE_H - 8:
             break
         if not line:
-            pdf.set_xy(SIDEBAR_X, min(pdf.get_y() + 1.5, PAGE_H - 8))
+            pdf.set_xy(SIDEBAR_X, min(pdf.get_y() + 1.0, PAGE_H - 8))
             continue
-        # Skip AI boilerplate markers
         if line in SKIP_WORDS:
             continue
 
         # ── Name ─────────────────────────────────────────────────────────────
         if line == name_line:
             pdf.set_x(SIDEBAR_X)
-            pdf.set_font("Arial", 'B', 14)
+            pdf.set_font("Arial", 'B', 13)
             pdf.set_text_color(*WHITE)
-            pdf.multi_cell(SIDEBAR_TW, 7, line.upper(), align='C')
-            # Gold underline
+            pdf.multi_cell(SIDEBAR_TW, 6.5, line.upper(), align='C')
             uy = pdf.get_y() + 1
             pdf.set_draw_color(*GOLD)
             pdf.set_line_width(0.5)
             pdf.line(SIDEBAR_X + 4, uy, SIDEBAR_W - 8, uy)
             pdf.set_line_width(0.2)
-            pdf.ln(4)
+            pdf.ln(3)
             continue
 
         # ── Section header (ALL CAPS, not a skip word, no digits) ────────────
         if (line.isupper() and 3 < len(line) < 30
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            pdf.ln(4)
+            sidebar_intro_lines = 0  # reset intro counter on new section
+            pdf.ln(3)
             pdf.set_x(SIDEBAR_X)
-            pdf.set_font("Arial", 'B', 8)
+            pdf.set_font("Arial", 'B', 7.5)
             pdf.set_text_color(*GOLD)
-            pdf.cell(SIDEBAR_TW, 5, line, ln=True)
-            # Gold rule
+            pdf.cell(SIDEBAR_TW, 4.5, line, ln=True)
             ry = pdf.get_y()
             pdf.set_draw_color(*GOLD)
             pdf.set_line_width(0.4)
             pdf.line(SIDEBAR_X, ry, SIDEBAR_W - 4, ry)
             pdf.set_line_width(0.2)
-            pdf.ln(2)
+            pdf.ln(1.5)
             continue
+
+        # ── Skill line "Category: item1, item2" (no dash prefix) ─────────────
+        if ":" in line and not line.startswith("-"):
+            colon_idx = line.index(":")
+            cat = line[:colon_idx].strip()
+            det = line[colon_idx + 1:].strip()
+            if cat and det and len(cat.split()) <= 4:
+                pdf.set_x(SIDEBAR_X)
+                pdf.set_font("Arial", 'B', 7)
+                pdf.set_text_color(*GOLD)
+                lw = min(pdf.get_string_width(cat + ": ") + 1, SIDEBAR_TW - 4)
+                pdf.cell(lw, 4, cat + ": ", ln=0)
+                pdf.set_font("Arial", '', 7)
+                pdf.set_text_color(*SIDEBAR_TEXT)
+                pdf.multi_cell(SIDEBAR_TW - lw, 4, det, align='L')
+                pdf.ln(0.2)
+                continue
 
         # ── Skill bullet "- Category: items" ─────────────────────────────────
         if line.startswith("-") and ":" in line:
@@ -660,29 +710,42 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             cat = cat_part.replace("-", "").strip()
             det = det_part.strip()
             pdf.set_x(SIDEBAR_X)
-            pdf.set_font("Arial", 'B', 7.5)
+            pdf.set_font("Arial", 'B', 7)
             pdf.set_text_color(*GOLD)
             label_w = min(pdf.get_string_width(cat + ": ") + 1, SIDEBAR_TW - 6)
-            pdf.cell(label_w, 4.5, cat + ": ", ln=0)
-            pdf.set_font("Arial", '', 7.5)
+            pdf.cell(label_w, 4, cat + ": ", ln=0)
+            pdf.set_font("Arial", '', 7)
             pdf.set_text_color(*SIDEBAR_TEXT)
-            pdf.multi_cell(SIDEBAR_TW - label_w, 4.5, det, align='L')
-            pdf.ln(0.3)
+            pdf.multi_cell(SIDEBAR_TW - label_w, 4, det, align='L')
+            pdf.ln(0.2)
             continue
 
-        # ── Bullet (certs, skills list) ───────────────────────────────────────
+        # ── Bullet (certs list) ───────────────────────────────────────────────
         if line.startswith("-"):
             pdf.set_x(SIDEBAR_X + 2)
-            pdf.set_font("Arial", '', 8)
+            pdf.set_font("Arial", '', 7.5)
             pdf.set_text_color(*SIDEBAR_TEXT)
-            pdf.multi_cell(SIDEBAR_TW - 2, 4.5, "\x95 " + line[1:].lstrip(), align='L')
+            pdf.multi_cell(SIDEBAR_TW - 2, 4, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── Regular sidebar text ──────────────────────────────────────────────
-        pdf.set_x(SIDEBAR_X)
-        pdf.set_font("Arial", size=8)
-        pdf.set_text_color(*SIDEBAR_DIM)
-        pdf.multi_cell(SIDEBAR_TW, 4.5, line, align='L')
+        # ── Regular sidebar text (intro sentences, contact, education) ────────
+        # Cap intro at 2 sentences to prevent sidebar overflow
+        if sidebar_intro_lines < 2:
+            # Truncate to first sentence if very long
+            display = line[:120] + ('...' if len(line) > 120 else '')
+            pdf.set_x(SIDEBAR_X)
+            pdf.set_font("Arial", size=7.5)
+            pdf.set_text_color(*SIDEBAR_DIM)
+            pdf.multi_cell(SIDEBAR_TW, 4, display, align='L')
+            sidebar_intro_lines += 1
+        else:
+            # Still render non-intro text (contact details, education etc.)
+            # but skip if it looks like more intro prose (long sentences)
+            if len(line) < 50 or '|' in line or '@' in line or any(c.isdigit() for c in line[:8]):
+                pdf.set_x(SIDEBAR_X)
+                pdf.set_font("Arial", size=7.5)
+                pdf.set_text_color(*SIDEBAR_DIM)
+                pdf.multi_cell(SIDEBAR_TW, 4, line, align='L')
 
     # ════════════════════════════════════════════════════════════════════════
     # MAIN COLUMN
