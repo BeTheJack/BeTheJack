@@ -173,7 +173,7 @@ def parse_cv_file(uploaded_file) -> str:
 
 
 # ==============================================================================
-# 3. AI — Tailor CV content to JD WITHOUT fabrication
+# 3. AI — Tailor CV content to JD
 # ==============================================================================
 
 def get_best_model():
@@ -189,6 +189,46 @@ def get_best_model():
     except Exception:
         pass
     return "models/gemini-1.5-flash"
+
+
+def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
+    """
+    Post-processing safety net: caps bullets per role at max_bullets.
+    Counter resets when a new role line (pipe) or section header is encountered.
+    """
+    lines = text.split('\n')
+    result = []
+    bullet_count = 0
+
+    for line in lines:
+        stripped = line.strip()
+
+        # New role / project header (pipe line, not a bullet) → reset counter
+        if '|' in stripped and not stripped.startswith('-'):
+            bullet_count = 0
+            result.append(line)
+            continue
+
+        # Section header (ALL CAPS, no digits, no pipe) → reset counter
+        if (stripped.isupper() and len(stripped) > 3
+                and '|' not in stripped
+                and not any(c.isdigit() for c in stripped)):
+            bullet_count = 0
+            result.append(line)
+            continue
+
+        # Bullet line → count and drop if over limit
+        if stripped.startswith('-') and len(stripped) > 1:
+            bullet_count += 1
+            if bullet_count > max_bullets:
+                continue   # silently drop
+            result.append(line)
+            continue
+
+        # Everything else → keep
+        result.append(line)
+
+    return '\n'.join(result)
 
 
 def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> str:
@@ -326,52 +366,78 @@ CERTIFICATIONS
 # 4. PDF BUILDER
 # ==============================================================================
 
-def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
-    """
-    Post-processing safety net: ensures no role block has more than max_bullets bullets.
-    Walks line by line; once a role header is found, counts consecutive bullet lines
-    and drops any beyond the limit.
-    """
-    lines = text.split('\n')
-    result = []
-    bullet_count = 0
 
-    for line in lines:
-        stripped = line.strip()
-        # A pipe line that isn't a bullet = new role/project header → reset counter
-        if '|' in stripped and not stripped.startswith('-'):
-            bullet_count = 0
-            result.append(line)
-            continue
-        # An ALL-CAPS line = section header → reset counter
-        if stripped.isupper() and len(stripped) > 3:
-            bullet_count = 0
-            result.append(line)
-            continue
-        # Bullet line
-        if stripped.startswith('- ') or (stripped.startswith('-') and len(stripped) > 2):
-            bullet_count += 1
-            if bullet_count > max_bullets:
-                continue   # DROP this bullet
-            result.append(line)
-            continue
-        # Everything else (blank lines, text) → reset bullet counter if blank
-        if not stripped:
-            bullet_count = 0
-        result.append(line)
-
-    return '\n'.join(result)
+def sanitize(text: str) -> str:
+    """
+    Converts AI-generated Unicode text into FPDF-safe Latin-1 text.
+    Maps every known problematic character explicitly before the final encode.
+    Uses 'replace' as final fallback so it NEVER raises an exception.
+    """
+    # Explicit character mappings — covers everything Gemini commonly outputs
     replacements = {
-        '\u2022': '-', '\u2013': '-', '\u2014': '-',
-        '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
-        '…': '...', '\u00a0': ' ',
+        # Dashes & hyphens
+        '\u2013': '-',   # en dash
+        '\u2014': '-',   # em dash
+        '\u2012': '-',   # figure dash
+        '\u2015': '-',   # horizontal bar
+        '\u2212': '-',   # minus sign
+        # Quotes
+        '\u2018': "'",   # left single quote
+        '\u2019': "'",   # right single quote
+        '\u201a': "'",   # single low-9 quote
+        '\u201c': '"',   # left double quote
+        '\u201d': '"',   # right double quote
+        '\u201e': '"',   # double low-9 quote
+        '\u00ab': '"',   # left angle quote
+        '\u00bb': '"',   # right angle quote
+        # Bullets & symbols
+        '\u2022': '-',   # bullet
+        '\u2023': '-',   # triangular bullet
+        '\u25cf': '-',   # black circle
+        '\u2219': '-',   # bullet operator
+        '\u00b7': '-',   # middle dot
+        # Ellipsis
+        '\u2026': '...',
+        # Spaces
+        '\u00a0': ' ',   # non-breaking space
+        '\u202f': ' ',   # narrow no-break space
+        '\u2009': ' ',   # thin space
+        '\u200b': '',    # zero-width space (remove)
+        '\u200c': '',    # zero-width non-joiner (remove)
+        '\u200d': '',    # zero-width joiner (remove)
+        '\ufeff': '',    # BOM (remove)
+        # Arrows (common in AI output)
+        '\u2192': '->',
+        '\u2190': '<-',
+        '\u21d2': '=>',
+        # Other common symbols
+        '\u00d7': 'x',   # multiplication sign
+        '\u00f7': '/',   # division sign
+        '\u00b0': ' deg',
+        '\u00ae': '(R)',
+        '\u00a9': '(C)',
+        '\u2122': '(TM)',
+        '\u20ac': 'EUR',
+        '\u00a3': 'GBP',
+        '\u00a5': 'JPY',
+        # Fractions
+        '\u00bd': '1/2',
+        '\u00bc': '1/4',
+        '\u00be': '3/4',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    text = re.sub(r'\*+', '', text)
-    text = re.sub(r'#{1,6}\s?', '', text)
-    text = text.replace('---', '')
-    return text.encode('latin-1', 'replace').decode('latin-1')
+
+    # Strip markdown artifacts the AI sometimes adds
+    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)  # remove **bold** / *italic*
+    text = re.sub(r'#{1,6}\s?', '', text)                   # remove ### headers
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)  # remove --- dividers
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)          # remove `code` blocks
+
+    # Final encode: replace any remaining non-Latin-1 chars with '?'
+    # This NEVER raises — worst case a rare char becomes '?'
+    text = text.encode('latin-1', errors='replace').decode('latin-1')
+    return text
 
 
 def crop_to_circle(image_path: str) -> str:
@@ -405,7 +471,13 @@ def build_pdf(content: str, style: str, photo_path: str = None, photo_size: int 
     else:
         _build_india_pdf(pdf, content)
 
-    return pdf.output(dest='S').encode('latin-1')
+    # pdf.output(dest='S') returns a bytearray in fpdf 1.x, or bytes in fpdf2.
+    # Handle both safely.
+    raw = pdf.output(dest='S')
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    # Legacy fpdf 1.x returns a latin-1 string
+    return raw.encode('latin-1', errors='replace')
 
 
 def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: int = 52):
