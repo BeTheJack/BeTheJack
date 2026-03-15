@@ -178,17 +178,29 @@ def parse_cv_file(uploaded_file) -> str:
 
 def get_best_model():
     try:
-        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro']
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Current Gemini models — 2.0/2.5 family
+        priorities = [
+            'models/gemini-2.0-flash',
+            'models/gemini-2.0-flash-lite',
+            'models/gemini-2.5-flash-preview-05-20',
+            'models/gemini-2.5-pro-preview-05-06',
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-pro',
+        ]
+        available = [
+            m.name for m in genai.list_models()
+            if 'generateContent' in m.supported_generation_methods
+        ]
         for p in priorities:
             if p in available:
                 return p
+        # Fallback: first available gemini model
         for m in available:
-            if 'gemini' in m:
+            if 'gemini' in m.lower():
                 return m
     except Exception:
         pass
-    return "models/gemini-1.5-flash"
+    return "models/gemini-2.0-flash"
 
 
 def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
