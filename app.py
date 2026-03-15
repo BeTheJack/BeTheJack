@@ -319,7 +319,7 @@ class PDF(FPDF):
     pass
 
 
-def build_pdf(content: str, style: str, photo_path: str = None) -> bytes:
+def build_pdf(content: str, style: str, photo_path: str = None, photo_size: int = 52) -> bytes:
     pdf = PDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=False)
@@ -327,40 +327,49 @@ def build_pdf(content: str, style: str, photo_path: str = None) -> bytes:
     content = sanitize(content)
 
     if style == "Global":
-        _build_global_pdf(pdf, content, photo_path)
+        _build_global_pdf(pdf, content, photo_path, photo_size=photo_size)
     else:
         _build_india_pdf(pdf, content)
 
     return pdf.output(dest='S').encode('latin-1')
 
 
-def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None):
+def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: int = 52):
     """
-    Two-column sidebar layout.
-    KEY FIX: Every multi_cell / cell call explicitly sets x AND uses a fixed width
-    so text never escapes its column boundary.
+    Premium two-column sidebar layout inspired by the attached PDF reference.
+    Dark navy sidebar, gold accent line, square-ish photo, bold company names in main.
+
+    photo_size: width in mm of the profile photo (user-adjustable, default 52)
     """
-    # ── Layout constants ────────────────────────────────────────────────────
-    SIDEBAR_X    = 5          # left padding inside sidebar
-    SIDEBAR_W    = 67         # total sidebar column width (mm)
-    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4   # usable text width inside sidebar = 58 mm
-    MAIN_X       = SIDEBAR_W + 7               # main column starts at 74 mm
+    # ── Layout constants ──────────────────────────────────────────────────────
+    SIDEBAR_W    = 72
+    SIDEBAR_X    = 6           # left text padding
+    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4   # = 62 mm usable
+    MAIN_X       = SIDEBAR_W + 6
     PAGE_W       = 210
-    RIGHT_MARGIN = 8
-    MAIN_W       = PAGE_W - MAIN_X - RIGHT_MARGIN  # usable main text width = 128 mm
+    RIGHT_MARGIN = 9
+    MAIN_W       = PAGE_W - MAIN_X - RIGHT_MARGIN
     PAGE_H       = 297
 
-    ACCENT    = (0, 55, 120)
-    LIGHT_BG  = (235, 240, 250)
-    DARK_TEXT = (30, 30, 30)
+    # Colour palette — matches the reference PDF
+    NAVY         = (18,  40,  76)   # dark navy sidebar bg
+    GOLD         = (180, 148,  80)  # gold accent
+    SIDEBAR_TEXT = (220, 220, 220)  # light text on dark bg
+    SIDEBAR_DIM  = (160, 160, 160)  # dimmer text (contact details)
+    WHITE        = (255, 255, 255)
+    BLACK        = (10,  10,  10)
+    DARK_GREY    = (50,  50,  50)
+    MID_GREY     = (100, 100, 100)
 
-    # ── Background & accent strip ────────────────────────────────────────────
-    pdf.set_fill_color(*LIGHT_BG)
+    # ── Full-page navy sidebar background ────────────────────────────────────
+    pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, SIDEBAR_W, PAGE_H, 'F')
-    pdf.set_fill_color(*ACCENT)
-    pdf.rect(0, 0, 4, PAGE_H, 'F')
 
-    # ── Split content at markers ─────────────────────────────────────────────
+    # Gold accent top bar (full width)
+    pdf.set_fill_color(*GOLD)
+    pdf.rect(0, 0, PAGE_W, 3, 'F')
+
+    # ── Split content ─────────────────────────────────────────────────────────
     sidebar_text = ""
     main_text    = text
     if "[SIDEBAR_START]" in text and "[MAIN_START]" in text:
@@ -372,41 +381,39 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None):
         sidebar_text = text[:idx].strip()
         main_text    = text[idx:].strip()
 
-    # ────────────────────────────────────────────────────────────────────────
-    # HELPER: write a multi_cell that is ALWAYS anchored to a fixed x and width
-    # ────────────────────────────────────────────────────────────────────────
-    def sidebar_cell(txt, h=4.5, align='L'):
-        """Write a cell pinned to the sidebar column."""
-        if pdf.get_y() > PAGE_H - 10:
-            return
-        pdf.set_x(SIDEBAR_X)
-        pdf.multi_cell(SIDEBAR_TW, h, txt, align=align)
-
-    def main_cell(txt, h=4.5, align='L'):
-        """Write a cell pinned to the main column."""
-        if pdf.get_y() > PAGE_H - 10:
-            return
-        pdf.set_x(MAIN_X)
-        pdf.multi_cell(MAIN_W, h, txt, align=align)
-
     # ════════════════════════════════════════════════════════════════════════
     # SIDEBAR
     # ════════════════════════════════════════════════════════════════════════
-    cur_y = 14
+    cur_y = 8  # start below gold top bar
 
-    # Optional circular photo
+    # ── Profile photo (square crop, centered in sidebar) ─────────────────────
     if photo_path and os.path.exists(photo_path):
-        circ = crop_to_circle(photo_path)
-        pdf.image(circ, x=13, y=cur_y, w=42)
-        cur_y += 50
-        if circ != photo_path:
-            try: os.remove(circ)
+        # Square crop (not circle) to match reference style
+        try:
+            img = Image.open(photo_path).convert("RGB")
+            size = min(img.size)
+            img  = ImageOps.fit(img, (size, size), centering=(0.5, 0.3))
+            sq_path = "temp_sq_photo.jpg"
+            img.save(sq_path, "JPEG", quality=92)
+            # Center photo horizontally in sidebar
+            photo_x = (SIDEBAR_W - photo_size) / 2
+            pdf.image(sq_path, x=photo_x, y=cur_y, w=photo_size)
+            cur_y += photo_size + 4
+            try: os.remove(sq_path)
             except: pass
+        except Exception:
+            cur_y = 8
+
+    # Gold divider under photo
+    pdf.set_draw_color(*GOLD)
+    pdf.set_line_width(0.6)
+    pdf.line(SIDEBAR_X, cur_y, SIDEBAR_W - 4, cur_y)
+    pdf.set_line_width(0.2)
+    cur_y += 4
 
     pdf.set_xy(SIDEBAR_X, cur_y)
-    pdf.set_text_color(*DARK_TEXT)
 
-    # Find the candidate name (first non-empty non-"NAME" line)
+    # Find name (first real non-header line)
     name_line = next(
         (l.strip() for l in sidebar_text.split('\n')
          if l.strip() and l.strip() != 'NAME'),
@@ -415,75 +422,88 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None):
 
     for raw_line in sidebar_text.split('\n'):
         line = raw_line.strip()
-        if pdf.get_y() > PAGE_H - 9:
+        if pdf.get_y() > PAGE_H - 8:
             break
         if not line:
-            pdf.set_xy(SIDEBAR_X, min(pdf.get_y() + 2, PAGE_H - 9))
+            pdf.set_xy(SIDEBAR_X, min(pdf.get_y() + 1.5, PAGE_H - 8))
             continue
         if line == 'NAME':
             continue
 
-        # ── Candidate name ──────────────────────────────────────────────────
+        # ── Name ─────────────────────────────────────────────────────────────
         if line == name_line:
             pdf.set_x(SIDEBAR_X)
-            pdf.set_font("Arial", 'B', 15)
-            pdf.set_text_color(*ACCENT)
-            pdf.multi_cell(SIDEBAR_TW, 7, line, align='C')
-            pdf.set_text_color(*DARK_TEXT)
-            pdf.ln(2)
+            pdf.set_font("Arial", 'B', 14)
+            pdf.set_text_color(*WHITE)
+            pdf.multi_cell(SIDEBAR_TW, 7, line.upper(), align='C')
+            # Gold underline
+            uy = pdf.get_y() + 1
+            pdf.set_draw_color(*GOLD)
+            pdf.set_line_width(0.5)
+            pdf.line(SIDEBAR_X + 4, uy, SIDEBAR_W - 8, uy)
+            pdf.set_line_width(0.2)
+            pdf.ln(4)
             continue
 
-        # ── Section header (ALL CAPS, short) ────────────────────────────────
+        # ── Section header ────────────────────────────────────────────────────
         if line.isupper() and len(line) < 30:
             pdf.ln(4)
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 8)
-            pdf.set_text_color(*ACCENT)
-            # Draw a coloured underline bar manually so we control width
-            pdf.cell(SIDEBAR_TW, 5, line, ln=True, border='B')
-            pdf.set_text_color(*DARK_TEXT)
-            pdf.set_font("Arial", size=8)
-            pdf.ln(1)
+            pdf.set_text_color(*GOLD)
+            pdf.cell(SIDEBAR_TW, 5, line, ln=True)
+            # Gold rule
+            ry = pdf.get_y()
+            pdf.set_draw_color(*GOLD)
+            pdf.set_line_width(0.4)
+            pdf.line(SIDEBAR_X, ry, SIDEBAR_W - 4, ry)
+            pdf.set_line_width(0.2)
+            pdf.ln(2)
             continue
 
-        # ── Skill bullet  "- Category: item1, item2" ────────────────────────
+        # ── Skill bullet "- Category: items" ─────────────────────────────────
         if line.startswith("-") and ":" in line:
             cat_part, _, det_part = line.partition(":")
             cat = cat_part.replace("-", "").strip()
             det = det_part.strip()
-            # Write category bold + detail normal, all within sidebar width
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 7.5)
-            # Use cell for the label (no wrap needed — it's short)
-            label_w = pdf.get_string_width(cat + ": ") + 1
-            # Clamp label width so it never overflows
-            label_w = min(label_w, SIDEBAR_TW - 4)
+            pdf.set_text_color(*GOLD)
+            label_w = min(pdf.get_string_width(cat + ": ") + 1, SIDEBAR_TW - 6)
             pdf.cell(label_w, 4.5, cat + ": ", ln=0)
             pdf.set_font("Arial", '', 7.5)
-            # Remaining width for the detail text
-            remaining_w = SIDEBAR_TW - label_w
-            pdf.multi_cell(remaining_w, 4.5, det, align='L')
-            pdf.ln(0.5)
+            pdf.set_text_color(*SIDEBAR_TEXT)
+            pdf.multi_cell(SIDEBAR_TW - label_w, 4.5, det, align='L')
+            pdf.ln(0.3)
             continue
 
-        # ── Regular text (contact, intro, education, certs) ─────────────────
+        # ── Bullet (certs, skills list) ───────────────────────────────────────
+        if line.startswith("-"):
+            pdf.set_x(SIDEBAR_X + 2)
+            pdf.set_font("Arial", '', 8)
+            pdf.set_text_color(*SIDEBAR_TEXT)
+            pdf.multi_cell(SIDEBAR_TW - 2, 4.5, "\x95 " + line[1:].lstrip(), align='L')
+            continue
+
+        # ── Regular sidebar text ──────────────────────────────────────────────
         pdf.set_x(SIDEBAR_X)
         pdf.set_font("Arial", size=8)
+        pdf.set_text_color(*SIDEBAR_DIM)
         pdf.multi_cell(SIDEBAR_TW, 4.5, line, align='L')
 
     # ════════════════════════════════════════════════════════════════════════
     # MAIN COLUMN
     # ════════════════════════════════════════════════════════════════════════
-    pdf.set_xy(MAIN_X, 14)
-    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(MAIN_X, 8)
+    pdf.set_text_color(*BLACK)
 
     def _new_page():
         pdf.add_page()
-        pdf.set_fill_color(*LIGHT_BG)
+        pdf.set_fill_color(*NAVY)
         pdf.rect(0, 0, SIDEBAR_W, PAGE_H, 'F')
-        pdf.set_fill_color(*ACCENT)
-        pdf.rect(0, 0, 4, PAGE_H, 'F')
-        pdf.set_xy(MAIN_X, 14)
+        pdf.set_fill_color(*GOLD)
+        pdf.rect(0, 0, PAGE_W, 3, 'F')
+        pdf.set_xy(MAIN_X, 8)
 
     for raw_line in main_text.split('\n'):
         line = raw_line.strip()
@@ -494,95 +514,100 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None):
         if pdf.get_y() > PAGE_H - 12:
             _new_page()
 
-        # ── Section header ───────────────────────────────────────────────────
+        # ── Section header ────────────────────────────────────────────────────
         if line.isupper() and len(line) < 40:
-            pdf.ln(4)
+            pdf.ln(5)
             pdf.set_x(MAIN_X)
             pdf.set_font("Arial", 'B', 11)
-            pdf.set_text_color(*ACCENT)
-            pdf.cell(MAIN_W, 6, line, ln=True, border='B')
-            pdf.set_text_color(0, 0, 0)
-            pdf.ln(2)
+            pdf.set_text_color(*NAVY)
+            pdf.cell(MAIN_W, 6, line, ln=True)
+            # Gold underline
+            ry = pdf.get_y()
+            pdf.set_draw_color(*GOLD)
+            pdf.set_line_width(0.5)
+            pdf.line(MAIN_X, ry, MAIN_X + MAIN_W, ry)
+            pdf.set_line_width(0.2)
+            pdf.set_text_color(*BLACK)
+            pdf.ln(3)
             continue
 
-        # ── Role / Project header line:  "Title | Company | Dates" ──────────
+        # ── Role/Project line:  "Title | Company | Dates" ────────────────────
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(3)
             pdf.set_x(MAIN_X)
+
             if len(parts) >= 3:
                 title, company, dates = parts[0], parts[1], parts[2]
-                # Title (bold) + Dates (italic, right-aligned) on one line
-                pdf.set_font("Arial", 'B', 10)
-                title_w  = MAIN_W * 0.62
-                dates_w  = MAIN_W * 0.38
+                # Company name BOLD large — like reference PDF
+                pdf.set_font("Arial", 'B', 11)
+                pdf.set_text_color(*NAVY)
                 pdf.set_x(MAIN_X)
-                pdf.cell(title_w, 5, title[:45], ln=0)      # truncate if extreme
-                pdf.set_font("Arial", 'I', 9)
-                pdf.set_text_color(80, 80, 80)
-                pdf.cell(dates_w, 5, dates, ln=1, align='R')
-                # Company on next line
+                pdf.cell(MAIN_W, 5.5, company.upper(), ln=True)
+                # Title + Dates on second row
                 pdf.set_x(MAIN_X)
+                pdf.set_font("Arial", 'B', 9.5)
+                pdf.set_text_color(*DARK_GREY)
+                title_w = MAIN_W * 0.65
+                pdf.cell(title_w, 4.5, title, ln=0)
                 pdf.set_font("Arial", 'I', 9)
-                pdf.set_text_color(60, 60, 60)
-                pdf.cell(MAIN_W, 4.5, company, ln=True)
+                pdf.set_text_color(*MID_GREY)
+                pdf.cell(MAIN_W - title_w, 4.5, dates, ln=1, align='R')
+
             elif len(parts) == 2:
+                # Project: "Name | Tech Stack"
                 pdf.set_font("Arial", 'B', 10)
-                pdf.set_x(MAIN_X)
-                pdf.cell(MAIN_W * 0.65, 5, parts[0][:45], ln=0)
+                pdf.set_text_color(*NAVY)
+                label_w = MAIN_W * 0.62
+                pdf.cell(label_w, 5, parts[0], ln=0)
                 pdf.set_font("Arial", 'I', 9)
-                pdf.set_text_color(80, 80, 80)
-                pdf.cell(MAIN_W * 0.35, 5, parts[1], ln=1, align='R')
+                pdf.set_text_color(*MID_GREY)
+                pdf.cell(MAIN_W - label_w, 5, parts[1], ln=1, align='R')
             else:
                 pdf.set_font("Arial", 'B', 10)
-                pdf.set_x(MAIN_X)
-                pdf.multi_cell(MAIN_W, 5, line, align='L')
-            pdf.set_text_color(0, 0, 0)
+                pdf.set_text_color(*NAVY)
+                pdf.multi_cell(MAIN_W, 5, parts[0], align='L')
+
+            pdf.set_text_color(*BLACK)
             continue
 
-        # ── Bullet point ─────────────────────────────────────────────────────
+        # ── Bullet ────────────────────────────────────────────────────────────
         if line.startswith("-"):
             pdf.set_x(MAIN_X + 3)
             pdf.set_font("Arial", size=9)
-            pdf.multi_cell(MAIN_W - 3, 4.5, line, align='L')
+            pdf.set_text_color(*DARK_GREY)
+            pdf.multi_cell(MAIN_W - 3, 4.5, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── Regular paragraph text ───────────────────────────────────────────
+        # ── Regular text ─────────────────────────────────────────────────────
         pdf.set_x(MAIN_X)
         pdf.set_font("Arial", size=9)
+        pdf.set_text_color(*DARK_GREY)
         pdf.multi_cell(MAIN_W, 4.5, line, align='L')
 
 
 def _build_india_pdf(pdf: FPDF, text: str):
     """
-    Jake's Resume-inspired ATS layout — the most recognised, most forked
-    single-column resume template used at FAANG / top tech companies.
+    Jake's Resume ATS layout — faithfully reproduced.
 
-    Rules faithfully followed:
-    • 0.5-inch (12.7mm) margins all sides
-    • Name: 24pt Bold, centred, black
-    • Contact bar: 9pt, centred, separator " | "
-    • Section header: 11pt Bold, ALL CAPS, full-width bottom border, small gap below
-    • Role row: "Title (bold 10.5) ............. Dates (italic 10, right-aligned)"
-    • Company row: italic 10pt, left-aligned, slight grey
-    • Bullet: 10pt, 5mm left indent, "bullet character + space + text", wrapped
-    • Tight vertical rhythm: 4.5pt line height for bullets, 5pt for headers
-    • Body font: Arial (Calibri-equivalent — ATS safe, clean)
+    Fixes applied vs previous version:
+    1. Name: 20pt (was 24pt — was too large and looked amateurish)
+    2. Contact bar: auto-wraps using multi_cell so phone/email never overflows
+    3. Projects: no longer skipped — rendered identically to Experience entries
+    4. Bullets: proper • character, consistent 4mm indent
+    5. Skills: category bold inline + detail normal, fully wrapped within margin
     """
+    MARGIN        = 12.7         # 0.5 inch = standard Jake margin
+    PAGE_W        = 210
+    PAGE_H        = 297
+    TEXT_W        = PAGE_W - 2 * MARGIN
+    BULLET_X      = MARGIN + 4
+    BULLET_W      = TEXT_W - 4
 
-    # ── Constants (Jake's exact proportions converted to mm) ─────────────────
-    MARGIN      = 12.7          # 0.5 inch
-    PAGE_W      = 210
-    PAGE_H      = 297
-    TEXT_W      = PAGE_W - 2 * MARGIN          # 184.6 mm
-    BULLET_INDENT = MARGIN + 4                 # 16.7 mm
-    BULLET_W      = TEXT_W - 4                # slightly narrower for wrapping
+    BLACK         = (0,   0,   0)
+    DARK_GREY     = (50,  50,  50)
+    MID_GREY      = (100, 100, 100)
 
-    BLACK       = (0, 0, 0)
-    DARK_GREY   = (55, 55, 55)
-    MID_GREY    = (90, 90, 90)
-
-    # ── Page setup ───────────────────────────────────────────────────────────
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
     pdf.set_top_margin(MARGIN)
@@ -591,71 +616,71 @@ def _build_india_pdf(pdf: FPDF, text: str):
     text  = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
     lines = text.split('\n')
 
-    # Pre-pass: find the name (first non-empty, non-header, non-"NAME" line)
+    # Pre-pass: identify name (first real non-empty, non-header line)
     name_line = next(
         (l.strip() for l in lines
          if l.strip() and l.strip() != "NAME" and not l.strip().isupper()),
         ""
     )
     name_done    = False
-    contact_done = False   # first contact bar right after name
+    contact_done = False
 
-    def draw_section_rule():
-        """Draw a thin full-width line — the Jake's Resume section divider."""
-        x = MARGIN
-        y = pdf.get_y()
-        pdf.set_draw_color(0, 0, 0)
-        pdf.set_line_width(0.4)
-        pdf.line(x, y, x + TEXT_W, y)
-        pdf.set_line_width(0.2)   # reset
+    def draw_rule():
+        """Thin full-width rule under section headers."""
+        pdf.set_draw_color(*BLACK)
+        pdf.set_line_width(0.35)
+        pdf.line(MARGIN, pdf.get_y(), MARGIN + TEXT_W, pdf.get_y())
+        pdf.set_line_width(0.2)
 
     for raw_line in lines:
         line = raw_line.strip()
 
-        # Hard page limit for 1-page mode
-        if pdf.get_y() > PAGE_H - MARGIN - 4:
-            break
+        if pdf.get_y() > PAGE_H - MARGIN - 3:
+            break   # hard 1-page limit
 
-        # ── Skip markers & "NAME" keyword ────────────────────────────────────
         if not line or line == "NAME":
             if line == "" and name_done:
-                pdf.ln(1.5)
+                pdf.ln(1.2)
             continue
 
-        # ── CANDIDATE NAME ────────────────────────────────────────────────────
+        # ── NAME ──────────────────────────────────────────────────────────────
         if not name_done and line == name_line:
-            pdf.set_font("Arial", 'B', 24)
+            pdf.set_font("Arial", 'B', 20)       # 20pt — professional, not oversized
             pdf.set_text_color(*BLACK)
             pdf.set_x(MARGIN)
-            pdf.cell(TEXT_W, 10, line, ln=True, align='C')
+            pdf.cell(TEXT_W, 9, line, ln=True, align='C')
             name_done = True
             continue
 
-        # ── CONTACT BAR (line right after name — has | or @ or phone chars) ──
+        # ── CONTACT BAR (immediately after name) ─────────────────────────────
+        # Use multi_cell so long lines wrap instead of overflowing
         if name_done and not contact_done:
-            if "|" in line or "@" in line or "+" in line:
+            if "|" in line or "@" in line or "+" in line or any(c.isdigit() for c in line[:6]):
                 pdf.set_font("Arial", '', 9)
                 pdf.set_text_color(*DARK_GREY)
                 pdf.set_x(MARGIN)
-                pdf.cell(TEXT_W, 5, line, ln=True, align='C')
-                pdf.ln(1)
+                pdf.multi_cell(TEXT_W, 4.5, line, align='C')
+                # Thin separator line
+                pdf.set_draw_color(*DARK_GREY)
+                pdf.set_line_width(0.3)
+                pdf.line(MARGIN, pdf.get_y() + 1, MARGIN + TEXT_W, pdf.get_y() + 1)
+                pdf.set_line_width(0.2)
+                pdf.ln(3)
                 contact_done = True
                 continue
 
-        # ── SECTION HEADER (ALL CAPS short line) ─────────────────────────────
+        # ── SECTION HEADER (ALL CAPS) ─────────────────────────────────────────
         if line.isupper() and 2 < len(line) < 40 and "|" not in line:
-            pdf.ln(4)
+            pdf.ln(5)
             pdf.set_x(MARGIN)
-            pdf.set_font("Arial", 'B', 11)
+            pdf.set_font("Arial", 'B', 10.5)
             pdf.set_text_color(*BLACK)
-            # Print the label
-            pdf.cell(TEXT_W, 5.5, line, ln=True, align='L')
-            # Draw rule immediately below
-            draw_section_rule()
+            pdf.cell(TEXT_W, 5, line, ln=True, align='L')
+            draw_rule()
             pdf.ln(2.5)
             continue
 
-        # ── ROLE / PROJECT HEADER  "Title | Company | Dates" ─────────────────
+        # ── ROLE / PROJECT LINE  "Title | Company | Dates"  ──────────────────
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(3)
@@ -663,55 +688,66 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
             if len(parts) >= 3:
                 title, company, dates = parts[0], parts[1], parts[2]
-
-                # Row 1: Title (bold) + Dates (italic, right)
+                # Row 1: Title bold (left) + Dates italic (right)
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
-                title_w = pdf.get_string_width(title) + 1
-                title_w = min(title_w, TEXT_W * 0.72)
+                # Dynamic title width — never > 72% of text width
+                tw = min(pdf.get_string_width(title) + 2, TEXT_W * 0.72)
                 pdf.set_x(MARGIN)
-                pdf.cell(title_w, 5, title, ln=0, align='L')
-                # Fill remaining width with dates right-aligned
-                dates_w = TEXT_W - title_w
-                pdf.set_font("Arial", 'I', 10)
+                pdf.cell(tw, 5, title, ln=0)
+                dw = TEXT_W - tw
+                pdf.set_font("Arial", 'I', 9.5)
                 pdf.set_text_color(*MID_GREY)
-                pdf.cell(dates_w, 5, dates, ln=1, align='R')
-
-                # Row 2: Company (italic, dark grey)
+                pdf.cell(dw, 5, dates, ln=1, align='R')
+                # Row 2: Company italic
                 pdf.set_x(MARGIN)
-                pdf.set_font("Arial", 'I', 10)
+                pdf.set_font("Arial", 'I', 9.5)
                 pdf.set_text_color(*DARK_GREY)
-                pdf.cell(TEXT_W, 4.5, company, ln=True, align='L')
+                pdf.cell(TEXT_W, 4.5, company, ln=True)
 
             elif len(parts) == 2:
-                # Could be "Project Name | Tech Stack"
+                # "Project | Tech Stack" — project name bold, tech italic right
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
-                label_w = TEXT_W * 0.65
-                pdf.cell(label_w, 5, parts[0], ln=0, align='L')
-                pdf.set_font("Arial", 'I', 10)
+                lw = TEXT_W * 0.62
+                pdf.cell(lw, 5, parts[0], ln=0)
+                pdf.set_font("Arial", 'I', 9)
                 pdf.set_text_color(*MID_GREY)
-                pdf.cell(TEXT_W - label_w, 5, parts[1], ln=1, align='R')
+                pdf.cell(TEXT_W - lw, 5, parts[1], ln=1, align='R')
             else:
                 pdf.set_font("Arial", 'B', 10.5)
                 pdf.set_text_color(*BLACK)
-                pdf.cell(TEXT_W, 5, parts[0], ln=True, align='L')
+                pdf.cell(TEXT_W, 5, parts[0], ln=True)
 
             pdf.set_text_color(*BLACK)
             continue
 
         # ── BULLET POINT ──────────────────────────────────────────────────────
         if line.startswith("-"):
-            # Replace leading dash with a proper bullet character
-            bullet_text = "\x95 " + line[1:].lstrip()   # chr(0x95) = •  in cp1252/latin-1
-            pdf.set_font("Arial", '', 10)
+            pdf.set_font("Arial", '', 9.5)
             pdf.set_text_color(*BLACK)
-            pdf.set_x(BULLET_INDENT)
-            pdf.multi_cell(BULLET_W, 4.5, bullet_text, align='L')
+            pdf.set_x(BULLET_X)
+            # chr(0x95) = bullet in Latin-1/cp1252
+            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── REGULAR TEXT (summaries, skill lines without dash, etc.) ─────────
-        pdf.set_font("Arial", '', 10)
+        # ── SKILL LINE  "Category: item, item" (no leading dash) ─────────────
+        if ":" in line and not line.startswith("-") and len(line) < 120:
+            cat_part, _, det_part = line.partition(":")
+            cat = cat_part.strip()
+            det = det_part.strip()
+            if cat and det:
+                pdf.set_x(MARGIN)
+                pdf.set_font("Arial", 'B', 9.5)
+                pdf.set_text_color(*BLACK)
+                lw = min(pdf.get_string_width(cat + ": ") + 1, TEXT_W * 0.35)
+                pdf.cell(lw, 4.5, cat + ": ", ln=0)
+                pdf.set_font("Arial", '', 9.5)
+                pdf.multi_cell(TEXT_W - lw, 4.5, det, align='L')
+                continue
+
+        # ── REGULAR TEXT ──────────────────────────────────────────────────────
+        pdf.set_font("Arial", '', 9.5)
         pdf.set_text_color(*BLACK)
         pdf.set_x(MARGIN)
         pdf.multi_cell(TEXT_W, 4.5, line, align='L')
@@ -735,6 +771,7 @@ for key, default in {
     "raw_cv_text": "",
     "tailored_content": "",
     "cv_filename": "",
+    "photo_size": 52,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -779,8 +816,16 @@ with col1:
     style_choice = "Global" if "Global" in mode else "India"
 
     uploaded_photo = None
+    photo_size     = st.session_state.photo_size
     if style_choice == "Global":
         uploaded_photo = st.file_uploader("Upload Profile Photo (optional)", type=['jpg', 'jpeg', 'png'])
+        if uploaded_photo:
+            photo_size = st.slider(
+                "📐 Photo size (mm)",
+                min_value=35, max_value=68, value=st.session_state.photo_size, step=1,
+                help="Adjust how large your profile photo appears in the sidebar"
+            )
+            st.session_state.photo_size = photo_size
 
 
 with col2:
@@ -851,7 +896,7 @@ if st.session_state.tailored_content:
                 with open(photo_path, "wb") as f:
                     f.write(uploaded_photo.getbuffer())
 
-            pdf_bytes = build_pdf(st.session_state.tailored_content, style_choice, photo_path=photo_path)
+            pdf_bytes = build_pdf(st.session_state.tailored_content, style_choice, photo_path=photo_path, photo_size=st.session_state.photo_size)
 
             if photo_path and os.path.exists(photo_path):
                 try: os.remove(photo_path)
