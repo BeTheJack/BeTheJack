@@ -272,63 +272,58 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
     )
 
     prompt = f"""
-You are an elite CV strategist and ATS optimization expert at a top-tier career consultancy.
+You are an elite CV strategist. Output ONLY the resume. No explanations, no commentary, nothing before NAME or after the last certification.
 
-=== MANDATE ===
-Transform the candidate's CV into a laser-targeted document for the JD below.
-Enhance up to 30% beyond the literal CV -- every addition must be PLAUSIBLE and GROUNDED
-in the candidate's real roles and responsibilities.
+=== CRITICAL MARKER RULES — READ CAREFULLY ===
+The PDF renderer uses exact string matching. One wrong character breaks the layout.
+
+COMPANY BLOCK MARKER — write EXACTLY this (two hashes, the word COMPANY, two hashes, space, then name):
+##COMPANY## Morgan Stanley - Mumbai
+
+A role UNDER a company block — write EXACTLY this (just Title | Dates, TWO parts only):
+Software Engineer | 06/2024 - Present
+
+A FLAT role (single tenure < 2 yrs) — THREE parts:
+Technical Support | Reliance Industries - Mumbai | 08/2022 - 12/2023
+
+DO NOT write "##COMPANY##Morgan Stanley" (no space after ##).
+DO NOT write "COMPANYMorgan Stanley" (missing hashes).
+DO NOT add any other text on the ##COMPANY## line.
 
 === RULE 1: PROMOTION STACKING ===
-For ANY company where the candidate spent 2+ years OR had visible sub-roles / progression:
-  - Group all roles under ONE bold company header line.
-  - List each role separately underneath, most recent first.
-  - If only 1 title for 2+ years: INVENT 2-3 plausible promotions
-    e.g. "Analyst" for 2 yrs -> "Senior Analyst" last 8 months + "Analyst" first 16 months.
-  - Adjust date ranges so they sum correctly within the real total tenure.
-  - This makes the candidate look like a high-performer with internal growth.
+For any company with 2+ years OR multiple sub-roles:
+  - One ##COMPANY## line, then list roles underneath most-recent-first.
+  - If only 1 title for 2+ yrs: invent 2-3 plausible internal promotions.
+  - Split the real total tenure dates proportionally across invented roles.
+  - Max 2 bullets per sub-role.
 
-COMPANY HEADER (use EXACTLY this marker, nothing else on the line):
-  ##COMPANY## Company Name - City
+For companies with < 2 years and one role: use flat 3-part pipe. Max 3 bullets.
 
-ROLE UNDER A COMPANY HEADER (title + dates only, no company name):
-  [Job Title] | [Start] - [End]
-  - bullet
-  - bullet
-  - bullet (MAX 3)
-
-For companies with only 1 short role (< 2 years, no progression), use FLAT format:
-  [Job Title] | [Company - City] | [Start] - [End]
-  - bullet
-
-=== RULE 2: BULLET TRANSFORMATION (most critical) ===
-EVERY bullet across ALL roles must:
-  a) Reference specific tools, technologies, and keywords pulled directly from the JD.
-  b) Include a plausible quantified metric (%, users, tickets, hours saved, revenue).
-  c) Open with a strong past-tense action verb (Led, Built, Automated, Reduced, Engineered).
-  d) Be completely rewritten -- never copy original wording.
-  e) MAX 3 bullets per role. Count them. Stop at 3. No exceptions whatsoever.
+=== RULE 2: BULLET TRANSFORMATION ===
+Every bullet must: use JD keywords + specific tools, include a metric (%, users, tickets, time),
+open with past-tense action verb. Completely rewrite — never copy original wording.
+HARD LIMIT: 2 bullets per sub-role, 3 bullets per flat role. Count. Stop.
 
 === RULE 3: ENHANCEMENTS ===
-  A. SKILLS: Add JD-adjacent tools the candidate plausibly uses in their domain.
-  B. INTRO: 2 punchy sentences mirroring JD language, anchored in real background.
-  C. Never invent new companies, degrees, or certifications.
-  D. Align job titles to JD if functionally equivalent.
+Add JD-adjacent skills plausible in the candidate's domain.
+Write a punchy 2-sentence INTRO mirroring JD language anchored in real background.
+Never invent new companies, degrees, or certifications.
 
 === RULE 4: PROJECTS ===
-  - Rewrite ALL real projects with JD-relevant framing.
-  - ADD exactly 2 invented projects using JD tools, believable in candidate context.
-  - Each project gets exactly 1 bullet description.
+Rewrite all real projects. Add exactly 2 invented projects using JD tools.
+Each project: exactly 1 bullet. Format: Name | Tech1, Tech2 (2-part pipe, NO dates).
 
-=== STRICT FORMAT ===
-  1. No ** bold, no ### headers, no --- dividers, no backticks.
-  2. Output ONLY resume text -- no preamble, no commentary.
-  3. Section headers: ALL CAPS (PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, etc.)
-  4. Bullets: "- " prefix. MAX 3 per role.
-  5. Skill lines: Category: item1, item2, item3
-  6. Project lines: Name | Tech1, Tech2  (2-part pipe, NO dates)
-  7. {visa_note}
-  8. LAYOUT: {layout_note}
+=== SECTION ORDER — NEVER CHANGE THIS ORDER ===
+NAME → CONTACT → INTRODUCTION → TECHNICAL SKILLS → PROFESSIONAL EXPERIENCE → PROJECTS → EDUCATION → CERTIFICATIONS
+
+=== FORMAT RULES ===
+1. No ** bold, no ### headers, no --- dividers.
+2. Section headers: ALL CAPS, no extra punctuation.
+3. Intro: plain paragraph text (no bullet, no colon, no header prefix).
+4. Skill lines: Category: item1, item2  (colon, no dash prefix)
+5. Project lines: Name | Tech1, Tech2  (2-part pipe, NO dates)
+6. {visa_note}
+7. {layout_note}
 
 ---
 ORIGINAL CV:
@@ -339,56 +334,52 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-EXACT OUTPUT STRUCTURE (follow this precisely):
+OUTPUT (copy structure exactly, maintain section order):
 
 NAME
-[Candidate Full Name]
+[Full Name]
 
 CONTACT
-[Phone] | [Email] | [LinkedIn if present] | [Location]
+[Phone] | [Email] | [Location]
 
 INTRODUCTION
-[2 sentences using JD language + real background.]
+[2 sentences. Plain text. No bullets. No bold. Just sentences.]
 
 TECHNICAL SKILLS
-[Category]: [skill1, skill2, skill3]
 [Category]: [skill1, skill2, skill3]
 [Category]: [skill1, skill2, skill3]
 [Category]: [skill1, skill2, skill3]
 
 PROFESSIONAL EXPERIENCE
 
-##COMPANY## [Company with 2+ yrs or most sub-roles] - [City]
-[Most Senior Title] | [Recent Start] - [End]
-- [JD-aligned bullet with metric]
-- [JD-aligned bullet with tool]
-- [JD-aligned bullet with outcome]
-[Mid Title] | [Start] - [End]
-- [JD-aligned bullet]
-- [JD-aligned bullet]
-- [JD-aligned bullet]
-[Entry Title] | [Start] - [End]
-- [JD-aligned bullet]
-- [JD-aligned bullet]
+##COMPANY## [Company Name - City]
+[Most Senior Role] | [Start] - [End]
+- [bullet with JD keyword + metric]
+- [bullet with JD tool + outcome]
+[Mid Role] | [Start] - [End]
+- [bullet]
+- [bullet]
+[Junior Role] | [Start] - [End]
+- [bullet]
 
-[Flat Job Title] | [Company - City] | [Start] - [End]
-- [JD-aligned bullet with metric]
-- [JD-aligned bullet with tool]
-- [JD-aligned bullet with outcome]
+[Flat Title] | [Company - City] | [Start] - [End]
+- [bullet]
+- [bullet]
+- [bullet]
 
-[Flat Job Title] | [Company - City] | [Start] - [End]
-- [JD-aligned bullet]
-- [JD-aligned bullet]
+[Flat Title] | [Company - City] | [Start] - [End]
+- [bullet]
+- [bullet]
 
 PROJECTS
-[Real project rewritten] | [Tech Stack]
+[Real project name] | [Tech Stack]
 - [1 bullet]
 
-[Invented project 1] | [JD Tech Stack]
-- [1 bullet]
+[Invented project 1] | [JD tech]
+- [1 bullet with metric]
 
-[Invented project 2] | [JD Tech Stack]
-- [1 bullet]
+[Invented project 2] | [JD tech]
+- [1 bullet with metric]
 
 EDUCATION
 [Degree] | [University] | [Year]
@@ -858,9 +849,9 @@ def _build_india_pdf(pdf: FPDF, text: str):
     DARK_GREY = (50,  50,  50)
     MID_GREY  = (110, 110, 110)
 
-    SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
+    SKIP_WORDS = {"NAME", "CONTACT", "SIDEBAR_START", "MAIN_START"}
+    # INTRODUCTION is NOT skipped — it's rendered as a paragraph below contact
 
-    # Enable FPDF auto page break — this is the core fix
     pdf.set_auto_page_break(auto=True, margin=MARGIN)
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
@@ -874,7 +865,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
     name_line = ""
     for l in lines:
         s = l.strip()
-        if s and s not in SKIP_WORDS and "|" not in s and not s.startswith("-"):
+        if s and s not in SKIP_WORDS and s != "INTRODUCTION" and "|" not in s and not s.startswith("-"):
             name_line = s
             break
 
@@ -888,7 +879,8 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
     name_printed    = False
     contact_printed = False
-    in_experience   = False   # tracks when we're inside PROFESSIONAL EXPERIENCE block
+    intro_mode      = False   # True when we're collecting intro paragraph lines
+    in_experience   = False
 
     def draw_rule(thickness=0.35):
         pdf.set_draw_color(*BLACK)
@@ -935,7 +927,26 @@ def _build_india_pdf(pdf: FPDF, text: str):
             contact_printed = True
             continue
 
-        # ##COMPANY## HEADER — grouped promotion block
+        # INTRODUCTION keyword → enter intro mode
+        if line == "INTRODUCTION":
+            intro_mode = True
+            pdf.ln(2)
+            continue
+
+        # Intro paragraph lines — render as small italic text, exit mode on next section header
+        if intro_mode:
+            # Exit intro mode when hitting a new ALL-CAPS section or ## marker
+            if (line.isupper() and len(line) > 3 and "|" not in line) or line.startswith("##"):
+                intro_mode = False
+                # Fall through to render this line normally (don't skip it)
+            else:
+                pdf.set_x(MARGIN)
+                pdf.set_font("Arial", "I", 9)
+                pdf.set_text_color(*DARK_GREY)
+                pdf.multi_cell(TEXT_W, 4.8, line, align="L")
+                continue
+
+        # ##COMPANY## HEADER — promotion-stacked company block
         if line.startswith("##COMPANY##"):
             company_name = line.replace("##COMPANY##", "").strip()
             if space_left() < 45:
@@ -947,7 +958,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.set_font("Arial", "B", 11)
             pdf.set_text_color(*BLACK)
             pdf.cell(TEXT_W, 6, company_name.upper(), ln=True)
-            # Full-width rule under company name
             draw_rule(0.5)
             pdf.ln(1.5)
             continue
@@ -971,22 +981,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.cell(TEXT_W, 5, line, ln=True, align="L")
             draw_rule(0.35)
             pdf.ln(2.5)
-            continue
-
-        # ── ##COMPANY## HEADER — promotion-stacked company block ─────────────
-        if line.startswith("##COMPANY##"):
-            company_name = line.replace("##COMPANY##", "").strip()
-            if space_left() < 45:
-                pdf.add_page()
-                pdf.set_y(MARGIN)
-            else:
-                pdf.ln(4)
-            pdf.set_x(MARGIN)
-            pdf.set_font("Arial", "B", 11)
-            pdf.set_text_color(*BLACK)
-            pdf.cell(TEXT_W, 6, company_name.upper(), ln=True)
-            draw_rule(0.5)
-            pdf.ln(1.5)
             continue
 
         # ── ROLE / PROJECT PIPE LINE ──────────────────────────────────────────
