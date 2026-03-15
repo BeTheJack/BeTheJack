@@ -194,7 +194,8 @@ def get_best_model():
 def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
     """
     Post-processing safety net: caps bullets per role at max_bullets.
-    Counter resets when a new role line (pipe) or section header is encountered.
+    Counter resets on: new role/project pipe line, section header, OR blank line
+    (blank lines separate roles/sections in the AI output).
     """
     lines = text.split('\n')
     result = []
@@ -202,6 +203,12 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
 
     for line in lines:
         stripped = line.strip()
+
+        # Blank line → always reset counter (roles are separated by blank lines)
+        if not stripped:
+            bullet_count = 0
+            result.append(line)
+            continue
 
         # New role / project header (pipe line, not a bullet) → reset counter
         if '|' in stripped and not stripped.startswith('-'):
@@ -303,7 +310,7 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-OUTPUT FORMAT (copy this structure exactly):
+OUTPUT FORMAT (copy this structure exactly — ORDER MATTERS, do not rearrange sections):
 
 NAME
 [Candidate Full Name]
@@ -770,31 +777,15 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
 def _build_india_pdf(pdf: FPDF, text: str):
     """
-    Jake's Resume — production-grade ATS layout.
-
-    ROOT CAUSE FIXES vs previous broken version:
-    - "NAME", "CONTACT", "INTRODUCTION" are SKIPPED as section keywords —
-      they are AI output artifacts that the PDF should not render as headers.
-    - Contact detection is explicit: only triggered by presence of @ or +91 / phone digits.
-    - Name detection: first non-empty line after stripping markers, regardless of case.
-    - Section headers: ALL CAPS AND length 4–35 chars AND not a skip-word AND no digits.
-    - Skills: "Category: values" detected with colon and no leading dash.
-    - Bullets: lines starting with "- ".
-    - Everything else: plain paragraph text.
-
-    LAYOUT (Jake's Resume spec):
-    - 0.5" (12.7mm) margins all sides
-    - Name: 20pt Bold, centred
-    - Contact: 9pt, centred, thin rule below
-    - Section header: 10.5pt Bold ALL CAPS, thin rule immediately below
-    - Role line: Title bold left + Dates italic right, Company italic below
-    - Bullet: 9.5pt, 4mm indent, • character
-    - Skills: Bold category inline + normal detail
+    Jake Resume ATS layout.
+    KEY FIX: set_auto_page_break(True) so multi_cell / content naturally
+    flows to page 2. Section header orphan prevention: if < 30mm left,
+    start a new page before printing the header.
     """
     MARGIN   = 12.7
     PAGE_W   = 210
     PAGE_H   = 297
-    TEXT_W   = PAGE_W - 2 * MARGIN     # 184.6 mm
+    TEXT_W   = PAGE_W - 2 * MARGIN
     BULLET_X = MARGIN + 4
     BULLET_W = TEXT_W - 4
 
@@ -802,19 +793,19 @@ def _build_india_pdf(pdf: FPDF, text: str):
     DARK_GREY = (50,  50,  50)
     MID_GREY  = (110, 110, 110)
 
-    # Words that look like ALL-CAPS headers but are AI boilerplate — skip them
     SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
 
+    # Enable FPDF auto page break — this is the core fix
+    pdf.set_auto_page_break(auto=True, margin=MARGIN)
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
     pdf.set_top_margin(MARGIN)
     pdf.set_y(MARGIN)
 
     text  = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
-    lines = [l.rstrip() for l in text.split('\n')]
+    lines = [l.rstrip() for l in text.split("\n")]
 
-    # ── Pre-pass: identify name and contact lines ─────────────────────────────
-    # Name = first non-empty line that is NOT a skip word and NOT a pipe line
+    # Pre-pass: identify name and contact lines
     name_line = ""
     for l in lines:
         s = l.strip()
@@ -822,11 +813,10 @@ def _build_india_pdf(pdf: FPDF, text: str):
             name_line = s
             break
 
-    # Contact = first line containing @ or starting with + or 7–10 consecutive digits
     contact_line = ""
     for l in lines:
         s = l.strip()
-        if "@" in s or s.startswith("+") or re.search(r'\d{7,}', s):
+        if "@" in s or s.startswith("+") or re.search(r"\d{7,}", s):
             if s != name_line:
                 contact_line = s
                 break
@@ -840,39 +830,37 @@ def _build_india_pdf(pdf: FPDF, text: str):
         pdf.line(MARGIN, pdf.get_y(), MARGIN + TEXT_W, pdf.get_y())
         pdf.set_line_width(0.2)
 
+    def space_left():
+        return PAGE_H - MARGIN - pdf.get_y()
+
     for raw_line in lines:
         line = raw_line.strip()
 
-        # ── Page limit ────────────────────────────────────────────────────────
-        if pdf.get_y() > PAGE_H - MARGIN - 3:
-            break
-
-        # ── Skip blank lines (small spacing) ──────────────────────────────────
         if not line:
             if name_printed:
                 pdf.ln(1.0)
             continue
 
-        # ── Skip boilerplate words ─────────────────────────────────────────────
         if line in SKIP_WORDS:
             continue
 
-        # ── NAME ──────────────────────────────────────────────────────────────
+        # NAME
         if not name_printed and line == name_line:
-            pdf.set_font("Arial", 'B', 20)
+            # Always Title Case — handles "UDAY KATARE", "uday katare", or "Uday Katare"
+            display_name = line.title()
+            pdf.set_font("Arial", "B", 20)
             pdf.set_text_color(*BLACK)
             pdf.set_x(MARGIN)
-            pdf.cell(TEXT_W, 9, line, ln=True, align='C')
+            pdf.cell(TEXT_W, 9, display_name, ln=True, align="C")
             name_printed = True
             continue
 
-        # ── CONTACT ───────────────────────────────────────────────────────────
+        # CONTACT
         if name_printed and not contact_printed and line == contact_line:
-            pdf.set_font("Arial", '', 9)
+            pdf.set_font("Arial", "", 9)
             pdf.set_text_color(*DARK_GREY)
             pdf.set_x(MARGIN)
-            pdf.multi_cell(TEXT_W, 4.5, line, align='C')
-            # thin rule below contact
+            pdf.multi_cell(TEXT_W, 4.5, line, align="C")
             pdf.set_draw_color(*MID_GREY)
             pdf.set_line_width(0.25)
             pdf.line(MARGIN, pdf.get_y() + 0.5, MARGIN + TEXT_W, pdf.get_y() + 0.5)
@@ -881,75 +869,74 @@ def _build_india_pdf(pdf: FPDF, text: str):
             contact_printed = True
             continue
 
-        # ── SECTION HEADER ─────────────────────────────────────────────────────
-        # ALL CAPS, 4–35 chars, no pipe, no digits, not a skip word
+        # SECTION HEADER
         if (line.isupper()
                 and 3 < len(line) <= 35
                 and "|" not in line
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            pdf.ln(5)
+            # Orphan prevention: if < 45mm left, move header to new page
+            # 45mm = header(12) + project name row(10) + bullet(8) + padding(15)
+            if space_left() < 45:
+                pdf.add_page()
+                pdf.set_y(MARGIN)
+            else:
+                pdf.ln(5)
             pdf.set_x(MARGIN)
-            pdf.set_font("Arial", 'B', 10.5)
+            pdf.set_font("Arial", "B", 10.5)
             pdf.set_text_color(*BLACK)
-            pdf.cell(TEXT_W, 5, line, ln=True, align='L')
+            pdf.cell(TEXT_W, 5, line, ln=True, align="L")
             draw_rule(0.35)
             pdf.ln(2.5)
             continue
 
-        # ── ROLE / PROJECT PIPE LINE  "Title | Company | Dates" ──────────────
+        # ROLE / PROJECT PIPE LINE
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(2.5)
 
             if len(parts) >= 3:
                 title, company, dates = parts[0], parts[1], parts[2]
-                # Row 1: title bold (left) + dates italic (right)
-                pdf.set_font("Arial", 'B', 10.5)
+                pdf.set_font("Arial", "B", 10.5)
                 pdf.set_text_color(*BLACK)
                 tw = min(pdf.get_string_width(title) + 2, TEXT_W * 0.74)
                 pdf.set_x(MARGIN)
                 pdf.cell(tw, 5, title, ln=0)
-                pdf.set_font("Arial", 'I', 9.5)
+                pdf.set_font("Arial", "I", 9.5)
                 pdf.set_text_color(*MID_GREY)
-                pdf.cell(TEXT_W - tw, 5, dates, ln=1, align='R')
-                # Row 2: company italic grey
+                pdf.cell(TEXT_W - tw, 5, dates, ln=1, align="R")
                 pdf.set_x(MARGIN)
-                pdf.set_font("Arial", 'I', 9.5)
+                pdf.set_font("Arial", "I", 9.5)
                 pdf.set_text_color(*DARK_GREY)
                 pdf.cell(TEXT_W, 4.5, company, ln=True)
 
             elif len(parts) == 2:
-                # "Project Name | Tech Stack" — measure before placing
                 proj_name  = parts[0]
                 tech_stack = parts[1]
-                pdf.set_font("Arial", 'B', 10.5)
+                pdf.set_font("Arial", "B", 10.5)
                 name_w = pdf.get_string_width(proj_name) + 2
-                pdf.set_font("Arial", 'I', 9)
+                pdf.set_font("Arial", "I", 9)
                 tech_w = pdf.get_string_width(tech_stack) + 2
-
                 pdf.set_x(MARGIN)
                 if name_w + tech_w + 4 <= TEXT_W:
-                    # Both fit on one line
                     gap_w = TEXT_W - name_w - tech_w
-                    pdf.set_font("Arial", 'B', 10.5)
+                    pdf.set_font("Arial", "B", 10.5)
                     pdf.set_text_color(*BLACK)
                     pdf.cell(name_w, 5, proj_name, ln=0)
                     pdf.cell(gap_w, 5, "", ln=0)
-                    pdf.set_font("Arial", 'I', 9)
+                    pdf.set_font("Arial", "I", 9)
                     pdf.set_text_color(*MID_GREY)
-                    pdf.cell(tech_w, 5, tech_stack, ln=1, align='R')
+                    pdf.cell(tech_w, 5, tech_stack, ln=1, align="R")
                 else:
-                    # Name too long — stack tech below
-                    pdf.set_font("Arial", 'B', 10.5)
+                    pdf.set_font("Arial", "B", 10.5)
                     pdf.set_text_color(*BLACK)
-                    pdf.multi_cell(TEXT_W, 5, proj_name, align='L')
+                    pdf.multi_cell(TEXT_W, 5, proj_name, align="L")
                     pdf.set_x(MARGIN)
-                    pdf.set_font("Arial", 'I', 9)
+                    pdf.set_font("Arial", "I", 9)
                     pdf.set_text_color(*MID_GREY)
-                    pdf.multi_cell(TEXT_W, 4.5, tech_stack, align='L')
+                    pdf.multi_cell(TEXT_W, 4.5, tech_stack, align="L")
             else:
-                pdf.set_font("Arial", 'B', 10.5)
+                pdf.set_font("Arial", "B", 10.5)
                 pdf.set_text_color(*BLACK)
                 pdf.set_x(MARGIN)
                 pdf.cell(TEXT_W, 5, parts[0], ln=True)
@@ -957,36 +944,35 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.set_text_color(*BLACK)
             continue
 
-        # ── SKILL LINE  "Category: value, value" ─────────────────────────────
+        # SKILL LINE
         if ":" in line and not line.startswith("-"):
             colon_idx = line.index(":")
             cat = line[:colon_idx].strip()
             det = line[colon_idx + 1:].strip()
-            # Only treat as skill if cat is short (< 5 words) and det exists
             if cat and det and len(cat.split()) <= 5:
                 pdf.set_x(MARGIN)
-                pdf.set_font("Arial", 'B', 9.5)
+                pdf.set_font("Arial", "B", 9.5)
                 pdf.set_text_color(*BLACK)
                 lw = min(pdf.get_string_width(cat + ":  ") + 1, TEXT_W * 0.40)
                 pdf.cell(lw, 4.5, cat + ": ", ln=0)
-                pdf.set_font("Arial", '', 9.5)
-                pdf.multi_cell(TEXT_W - lw, 4.5, det, align='L')
+                pdf.set_font("Arial", "", 9.5)
+                pdf.multi_cell(TEXT_W - lw, 4.5, det, align="L")
                 continue
 
-        # ── BULLET POINT ──────────────────────────────────────────────────────
+        # BULLET
         if line.startswith("- ") or line.startswith("-"):
-            content = line[1:].lstrip() if line.startswith("-") else line
-            pdf.set_font("Arial", '', 9.5)
+            content = line[1:].lstrip()
+            pdf.set_font("Arial", "", 9.5)
             pdf.set_text_color(*BLACK)
             pdf.set_x(BULLET_X)
-            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + content, align='L')
+            pdf.multi_cell(BULLET_W, 4.5, "\x95 " + content, align="L")
             continue
 
-        # ── REGULAR PARAGRAPH TEXT ────────────────────────────────────────────
-        pdf.set_font("Arial", '', 9.5)
+        # REGULAR TEXT
+        pdf.set_font("Arial", "", 9.5)
         pdf.set_text_color(*BLACK)
         pdf.set_x(MARGIN)
-        pdf.multi_cell(TEXT_W, 4.5, line, align='L')
+        pdf.multi_cell(TEXT_W, 4.5, line, align="L")
 
 
 # ==============================================================================
