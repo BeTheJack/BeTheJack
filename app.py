@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 from fpdf import FPDF
 import os
 import re
@@ -97,14 +97,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# Groq model to use — fast and capable
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
 def init_ai():
     try:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-        genai.configure(api_key=api_key)
-        return True
+        api_key = st.secrets["GROQ_API_KEY"]
+        # Quick validation: instantiate the client
+        client = Groq(api_key=api_key)
+        return client
+    except KeyError:
+        st.error("🚨 API Key Missing. Add 'GROQ_API_KEY' to Streamlit Secrets.")
+        return None
     except Exception as e:
-        st.error(f"🚨 API Key Missing. Add 'GOOGLE_API_KEY' to Streamlit Secrets. ({e})")
-        return False
+        st.error(f"🚨 Could not initialise Groq client: {e}")
+        return None
 
 
 # ==============================================================================
@@ -173,35 +181,8 @@ def parse_cv_file(uploaded_file) -> str:
 
 
 # ==============================================================================
-# 3. AI — Tailor CV content to JD
+# 3. AI — Tailor CV content to JD (Groq)
 # ==============================================================================
-
-def get_best_model():
-    try:
-        # Current Gemini models — 2.0/2.5 family
-        priorities = [
-            'models/gemini-2.0-flash',
-            'models/gemini-2.0-flash-lite',
-            'models/gemini-2.5-flash-preview-05-20',
-            'models/gemini-2.5-pro-preview-05-06',
-            'models/gemini-1.5-flash',
-            'models/gemini-1.5-pro',
-        ]
-        available = [
-            m.name for m in genai.list_models()
-            if 'generateContent' in m.supported_generation_methods
-        ]
-        for p in priorities:
-            if p in available:
-                return p
-        # Fallback: first available gemini model
-        for m in available:
-            if 'gemini' in m.lower():
-                return m
-    except Exception:
-        pass
-    return "models/gemini-2.0-flash"
-
 
 def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
     """
@@ -240,8 +221,7 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
                 current_cap = max_bullets   # flat role: 3 bullets
             elif len(parts) == 2:
                 # Is p1 a date? → sub-role (cap 3). Otherwise project (cap 1).
-                import re as _re
-                is_date = bool(_re.search(
+                is_date = bool(re.search(
                     r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', parts[1]))
                 current_cap = max_bullets if is_date else 1
             result.append(line)
@@ -273,10 +253,7 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
 def fix_company_markers(text: str) -> str:
     """
     Post-processor: normalises any AI company header variant to ##COMPANY## Name.
-    The AI produces: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY##Foo' etc.
-    All are mapped to '##COMPANY## Foo Bar - City'.
     """
-    # Catches ALL variants: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY## Foo'
     company_re = re.compile(
         r'^(?:#+\s*COMPANY\s*#+\s*|#+\s*COMPANY\s*|COMPANY\s*)',
         re.IGNORECASE
@@ -293,13 +270,11 @@ def fix_company_markers(text: str) -> str:
     return '\n'.join(result)
 
 
-def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> str:
+def tailor_cv(groq_client: Groq, raw_cv_text: str, job_description: str, style: str = "Global") -> str:
     """
     Takes real extracted CV text and the target JD.
-    Returns a tailored, enhanced version with up to 30% JD-driven augmentation.
+    Returns a tailored, enhanced version using Groq's LLM API.
     """
-    model = genai.GenerativeModel(get_best_model())
-
     visa_note = (
         "Extract Visa Status and Nationality from the CV if present; include in CONTACT section."
         if style == "Global"
@@ -435,8 +410,13 @@ CERTIFICATIONS
 """
 
     try:
-        response = model.generate_content(prompt)
-        raw = response.text
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            temperature=0.7,
+        )
+        raw = response.choices[0].message.content
         raw = fix_company_markers(raw)
         return enforce_bullet_limit(raw, max_bullets=3)
     except Exception as e:
@@ -451,72 +431,29 @@ CERTIFICATIONS
 def sanitize(text: str) -> str:
     """
     Converts AI-generated Unicode text into FPDF-safe Latin-1 text.
-    Maps every known problematic character explicitly before the final encode.
-    Uses 'replace' as final fallback so it NEVER raises an exception.
     """
-    # Explicit character mappings — covers everything Gemini commonly outputs
     replacements = {
-        # Dashes & hyphens
-        '\u2013': '-',   # en dash
-        '\u2014': '-',   # em dash
-        '\u2012': '-',   # figure dash
-        '\u2015': '-',   # horizontal bar
-        '\u2212': '-',   # minus sign
-        # Quotes
-        '\u2018': "'",   # left single quote
-        '\u2019': "'",   # right single quote
-        '\u201a': "'",   # single low-9 quote
-        '\u201c': '"',   # left double quote
-        '\u201d': '"',   # right double quote
-        '\u201e': '"',   # double low-9 quote
-        '\u00ab': '"',   # left angle quote
-        '\u00bb': '"',   # right angle quote
-        # Bullets & symbols
-        '\u2022': '-',   # bullet
-        '\u2023': '-',   # triangular bullet
-        '\u25cf': '-',   # black circle
-        '\u2219': '-',   # bullet operator
-        '\u00b7': '-',   # middle dot
-        # Ellipsis
+        '\u2013': '-', '\u2014': '-', '\u2012': '-', '\u2015': '-', '\u2212': '-',
+        '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201c': '"', '\u201d': '"',
+        '\u201e': '"', '\u00ab': '"', '\u00bb': '"',
+        '\u2022': '-', '\u2023': '-', '\u25cf': '-', '\u2219': '-', '\u00b7': '-',
         '\u2026': '...',
-        # Spaces
-        '\u00a0': ' ',   # non-breaking space
-        '\u202f': ' ',   # narrow no-break space
-        '\u2009': ' ',   # thin space
-        '\u200b': '',    # zero-width space (remove)
-        '\u200c': '',    # zero-width non-joiner (remove)
-        '\u200d': '',    # zero-width joiner (remove)
-        '\ufeff': '',    # BOM (remove)
-        # Arrows (common in AI output)
-        '\u2192': '->',
-        '\u2190': '<-',
-        '\u21d2': '=>',
-        # Other common symbols
-        '\u00d7': 'x',   # multiplication sign
-        '\u00f7': '/',   # division sign
-        '\u00b0': ' deg',
-        '\u00ae': '(R)',
-        '\u00a9': '(C)',
-        '\u2122': '(TM)',
-        '\u20ac': 'EUR',
-        '\u00a3': 'GBP',
-        '\u00a5': 'JPY',
-        # Fractions
-        '\u00bd': '1/2',
-        '\u00bc': '1/4',
-        '\u00be': '3/4',
+        '\u00a0': ' ', '\u202f': ' ', '\u2009': ' ',
+        '\u200b': '', '\u200c': '', '\u200d': '', '\ufeff': '',
+        '\u2192': '->', '\u2190': '<-', '\u21d2': '=>',
+        '\u00d7': 'x', '\u00f7': '/', '\u00b0': ' deg',
+        '\u00ae': '(R)', '\u00a9': '(C)', '\u2122': '(TM)',
+        '\u20ac': 'EUR', '\u00a3': 'GBP', '\u00a5': 'JPY',
+        '\u00bd': '1/2', '\u00bc': '1/4', '\u00be': '3/4',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
 
-    # Strip markdown artifacts the AI sometimes adds
-    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)  # remove **bold** / *italic*
-    text = re.sub(r'#{1,6}\s?', '', text)                   # remove ### headers
-    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)  # remove --- dividers
-    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)          # remove `code` blocks
+    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)
+    text = re.sub(r'#{1,6}\s?', '', text)
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)
 
-    # Final encode: replace any remaining non-Latin-1 chars with '?'
-    # This NEVER raises — worst case a rare char becomes '?'
     text = text.encode('latin-1', errors='replace').decode('latin-1')
     return text
 
@@ -552,51 +489,36 @@ def build_pdf(content: str, style: str, photo_path: str = None, photo_size: int 
     else:
         _build_india_pdf(pdf, content)
 
-    # pdf.output(dest='S') returns a bytearray in fpdf 1.x, or bytes in fpdf2.
-    # Handle both safely.
     raw = pdf.output(dest='S')
     if isinstance(raw, (bytes, bytearray)):
         return bytes(raw)
-    # Legacy fpdf 1.x returns a latin-1 string
     return raw.encode('latin-1', errors='replace')
 
 
 def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: int = 52):
-    """
-    Premium two-column sidebar layout inspired by the attached PDF reference.
-    Dark navy sidebar, gold accent line, square-ish photo, bold company names in main.
-
-    photo_size: width in mm of the profile photo (user-adjustable, default 52)
-    """
-    # ── Layout constants ──────────────────────────────────────────────────────
     SIDEBAR_W    = 72
-    SIDEBAR_X    = 6           # left text padding
-    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4   # = 62 mm usable
+    SIDEBAR_X    = 6
+    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4
     MAIN_X       = SIDEBAR_W + 6
     PAGE_W       = 210
     RIGHT_MARGIN = 9
     MAIN_W       = PAGE_W - MAIN_X - RIGHT_MARGIN
     PAGE_H       = 297
 
-    # Colour palette — matches the reference PDF
-    NAVY         = (18,  40,  76)   # dark navy sidebar bg
-    GOLD         = (180, 148,  80)  # gold accent
-    SIDEBAR_TEXT = (220, 220, 220)  # light text on dark bg
-    SIDEBAR_DIM  = (160, 160, 160)  # dimmer text (contact details)
+    NAVY         = (18,  40,  76)
+    GOLD         = (180, 148,  80)
+    SIDEBAR_TEXT = (220, 220, 220)
+    SIDEBAR_DIM  = (160, 160, 160)
     WHITE        = (255, 255, 255)
     BLACK        = (10,  10,  10)
     DARK_GREY    = (50,  50,  50)
     MID_GREY     = (100, 100, 100)
 
-    # ── Full-page navy sidebar background ────────────────────────────────────
     pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, SIDEBAR_W, PAGE_H, 'F')
-
-    # Gold accent top bar (full width)
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 0, PAGE_W, 3, 'F')
 
-    # ── Split content ─────────────────────────────────────────────────────────
     sidebar_text = ""
     main_text    = text
     if "[SIDEBAR_START]" in text and "[MAIN_START]" in text:
@@ -610,24 +532,18 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
     SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
 
-    # ════════════════════════════════════════════════════════════════════════
-    # SIDEBAR
-    # ════════════════════════════════════════════════════════════════════════
-    cur_y = 8  # start below gold top bar
+    cur_y = 8
 
-    # ── Profile photo — CIRCLE crop, centered in sidebar ─────────────────────
     if photo_path and os.path.exists(photo_path):
         try:
             img  = Image.open(photo_path).convert("RGBA")
             size = min(img.size)
             img  = ImageOps.fit(img, (size, size), centering=(0.5, 0.25))
-            # Create circular mask
             mask = Image.new('L', (size, size), 0)
             ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
             circle = Image.new('RGBA', (size, size), (0, 0, 0, 0))
             circle.paste(img, mask=mask)
-            # Paste on white bg (FPDF needs RGB)
-            bg = Image.new('RGB', (size, size), (18, 40, 76))  # navy bg matches sidebar
+            bg = Image.new('RGB', (size, size), (18, 40, 76))
             bg.paste(circle, mask=circle.split()[3])
             circ_path = "temp_circle_photo.png"
             bg.save(circ_path, "PNG")
@@ -639,23 +555,20 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         except Exception:
             cur_y = 8
 
-    # Gold divider under photo
     pdf.set_draw_color(*GOLD)
     pdf.set_line_width(0.6)
     pdf.line(SIDEBAR_X, cur_y, SIDEBAR_W - 4, cur_y)
     pdf.set_line_width(0.2)
     cur_y += 4
-
     pdf.set_xy(SIDEBAR_X, cur_y)
 
-    # Find name (first non-skip, non-pipe, non-empty line in sidebar)
     name_line = next(
         (l.strip() for l in sidebar_text.split('\n')
          if l.strip() and l.strip() not in SKIP_WORDS and '|' not in l),
         ''
     )
 
-    sidebar_intro_lines = 0   # count intro sentences rendered — cap at 2
+    sidebar_intro_lines = 0
 
     for raw_line in sidebar_text.split('\n'):
         line = raw_line.strip()
@@ -667,7 +580,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if line in SKIP_WORDS:
             continue
 
-        # ── Name ─────────────────────────────────────────────────────────────
         if line == name_line:
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 13)
@@ -681,11 +593,10 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(3)
             continue
 
-        # ── Section header (ALL CAPS, not a skip word, no digits) ────────────
         if (line.isupper() and 3 < len(line) < 30
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            sidebar_intro_lines = 0  # reset intro counter on new section
+            sidebar_intro_lines = 0
             pdf.ln(3)
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 7.5)
@@ -699,7 +610,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(1.5)
             continue
 
-        # ── Skill line "Category: item1, item2" (no dash prefix) ─────────────
         if ":" in line and not line.startswith("-"):
             colon_idx = line.index(":")
             cat = line[:colon_idx].strip()
@@ -716,7 +626,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
                 pdf.ln(0.2)
                 continue
 
-        # ── Skill bullet "- Category: items" ─────────────────────────────────
         if line.startswith("-") and ":" in line:
             cat_part, _, det_part = line.partition(":")
             cat = cat_part.replace("-", "").strip()
@@ -732,7 +641,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(0.2)
             continue
 
-        # ── Bullet (certs list) ───────────────────────────────────────────────
         if line.startswith("-"):
             pdf.set_x(SIDEBAR_X + 2)
             pdf.set_font("Arial", '', 7.5)
@@ -740,10 +648,7 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(SIDEBAR_TW - 2, 4, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── Regular sidebar text (intro sentences, contact, education) ────────
-        # Cap intro at 2 sentences to prevent sidebar overflow
         if sidebar_intro_lines < 2:
-            # Truncate to first sentence if very long
             display = line[:120] + ('...' if len(line) > 120 else '')
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", size=7.5)
@@ -751,17 +656,13 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(SIDEBAR_TW, 4, display, align='L')
             sidebar_intro_lines += 1
         else:
-            # Still render non-intro text (contact details, education etc.)
-            # but skip if it looks like more intro prose (long sentences)
             if len(line) < 50 or '|' in line or '@' in line or any(c.isdigit() for c in line[:8]):
                 pdf.set_x(SIDEBAR_X)
                 pdf.set_font("Arial", size=7.5)
                 pdf.set_text_color(*SIDEBAR_DIM)
                 pdf.multi_cell(SIDEBAR_TW, 4, line, align='L')
 
-    # ════════════════════════════════════════════════════════════════════════
     # MAIN COLUMN
-    # ════════════════════════════════════════════════════════════════════════
     pdf.set_xy(MAIN_X, 8)
     pdf.set_text_color(*BLACK)
 
@@ -784,7 +685,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if pdf.get_y() > PAGE_H - 12:
             _new_page()
 
-        # Section header
         if (line.isupper() and len(line) < 40
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
@@ -803,7 +703,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(3)
             continue
 
-        # ##COMPANY## header
         if line.startswith("##COMPANY##"):
             company_name = line.replace("##COMPANY##", "").strip()
             if pdf.get_y() > PAGE_H - 18:
@@ -823,7 +722,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(1.5)
             continue
 
-        # Pipe line: 3-part=flat role, 2-part=sub-role or project
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(3)
@@ -845,8 +743,7 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
             elif len(parts) == 2:
                 p0, p1 = parts[0], parts[1]
-                import re as _re
-                is_date = bool(_re.search(
+                is_date = bool(re.search(
                     r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
                 if is_date:
                     pdf.set_x(MAIN_X + 2)
@@ -891,7 +788,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.set_text_color(*BLACK)
             continue
 
-        # Bullet
         if line.startswith("-"):
             pdf.set_x(MAIN_X + 3)
             pdf.set_font("Arial", size=9)
@@ -899,7 +795,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(MAIN_W - 3, 4.5, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # Regular text
         pdf.set_x(MAIN_X)
         pdf.set_font("Arial", size=9)
         pdf.set_text_color(*DARK_GREY)
@@ -907,12 +802,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
 
 def _build_india_pdf(pdf: FPDF, text: str):
-    """
-    Jake Resume ATS layout.
-    KEY FIX: set_auto_page_break(True) so multi_cell / content naturally
-    flows to page 2. Section header orphan prevention: if < 30mm left,
-    start a new page before printing the header.
-    """
     MARGIN   = 12.7
     PAGE_W   = 210
     PAGE_H   = 297
@@ -925,7 +814,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
     MID_GREY  = (110, 110, 110)
 
     SKIP_WORDS = {"NAME", "CONTACT", "SIDEBAR_START", "MAIN_START"}
-    # INTRODUCTION is NOT skipped — it's rendered as a paragraph below contact
 
     pdf.set_auto_page_break(auto=True, margin=MARGIN)
     pdf.set_left_margin(MARGIN)
@@ -936,7 +824,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
     text  = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
     lines = [l.rstrip() for l in text.split("\n")]
 
-    # Pre-pass: identify name and contact lines
     name_line = ""
     for l in lines:
         s = l.strip()
@@ -954,7 +841,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
     name_printed    = False
     contact_printed = False
-    intro_mode      = False   # True when we're collecting intro paragraph lines
+    intro_mode      = False
     in_experience   = False
 
     def draw_rule(thickness=0.35):
@@ -977,9 +864,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
         if line in SKIP_WORDS:
             continue
 
-        # NAME
         if not name_printed and line == name_line:
-            # Always Title Case — handles "UDAY KATARE", "uday katare", or "Uday Katare"
             display_name = line.title()
             pdf.set_font("Arial", "B", 20)
             pdf.set_text_color(*BLACK)
@@ -988,7 +873,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
             name_printed = True
             continue
 
-        # CONTACT
         if name_printed and not contact_printed and line == contact_line:
             pdf.set_font("Arial", "", 9)
             pdf.set_text_color(*DARK_GREY)
@@ -1002,18 +886,14 @@ def _build_india_pdf(pdf: FPDF, text: str):
             contact_printed = True
             continue
 
-        # INTRODUCTION keyword → enter intro mode
         if line == "INTRODUCTION":
             intro_mode = True
             pdf.ln(2)
             continue
 
-        # Intro paragraph lines — render as small italic text, exit mode on next section header
         if intro_mode:
-            # Exit intro mode when hitting a new ALL-CAPS section or ## marker
             if (line.isupper() and len(line) > 3 and "|" not in line) or line.startswith("##"):
                 intro_mode = False
-                # Fall through to render this line normally (don't skip it)
             else:
                 pdf.set_x(MARGIN)
                 pdf.set_font("Arial", "I", 9)
@@ -1021,7 +901,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
                 pdf.multi_cell(TEXT_W, 4.8, line, align="L")
                 continue
 
-        # ##COMPANY## HEADER — promotion-stacked company block
         if line.startswith("##COMPANY##"):
             company_name = line.replace("##COMPANY##", "").strip()
             if space_left() < 45:
@@ -1037,13 +916,11 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.ln(1.5)
             continue
 
-        # SECTION HEADER
         if (line.isupper()
                 and 3 < len(line) <= 35
                 and "|" not in line
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            # Track experience section
             in_experience = ("EXPERIENCE" in line)
             if space_left() < 45:
                 pdf.add_page()
@@ -1058,13 +935,11 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.ln(2.5)
             continue
 
-        # ── ROLE / PROJECT PIPE LINE ──────────────────────────────────────────
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(2.5)
 
             if len(parts) >= 3:
-                # 3-part: Title | Company - City | Dates  (flat role)
                 title, company, dates = parts[0], parts[1], parts[2]
                 pdf.set_font("Arial", "B", 10.5)
                 pdf.set_text_color(*BLACK)
@@ -1081,13 +956,9 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
             elif len(parts) == 2:
                 p0, p1 = parts[0], parts[1]
-                # Is p1 a date range? Check for year digits or "Present"
                 is_date = bool(re.search(
-                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec',
-                    p1
-                ))
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
                 if is_date:
-                    # Sub-role under ##COMPANY## header: "Title | Start - End"
                     ROLE_X = MARGIN + 3
                     ROLE_W = TEXT_W - 3
                     pdf.set_font("Arial", "B", 10)
@@ -1099,7 +970,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
                     pdf.set_text_color(*MID_GREY)
                     pdf.cell(ROLE_W - tw, 5, p1, ln=1, align="R")
                 else:
-                    # Project: "Name | Tech Stack"
                     proj_name  = p0
                     tech_stack = p1
                     pdf.set_font("Arial", "B", 10.5)
@@ -1133,7 +1003,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.set_text_color(*BLACK)
             continue
 
-        # SKILL LINE
         if ":" in line and not line.startswith("-"):
             colon_idx = line.index(":")
             cat = line[:colon_idx].strip()
@@ -1148,10 +1017,8 @@ def _build_india_pdf(pdf: FPDF, text: str):
                 pdf.multi_cell(TEXT_W - lw, 4.5, det, align="L")
                 continue
 
-        # BULLET
         if line.startswith("- ") or line.startswith("-"):
             content = line[1:].lstrip()
-            # Extra indent inside experience block (under sub-roles)
             x_pos = BULLET_X + 3 if in_experience else BULLET_X
             w     = BULLET_W - 3 if in_experience else BULLET_W
             pdf.set_font("Arial", "", 9.5)
@@ -1160,7 +1027,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
             pdf.multi_cell(w, 4.5, "\x95 " + content, align="L")
             continue
 
-        # REGULAR TEXT
         pdf.set_font("Arial", "", 9.5)
         pdf.set_text_color(*BLACK)
         pdf.set_x(MARGIN)
@@ -1178,7 +1044,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-ai_connected = init_ai()
+groq_client = init_ai()
 
 # Session state
 for key, default in {
@@ -1272,11 +1138,12 @@ if generate_btn:
         st.error("Please upload your CV first.")
     elif not job_desc.strip():
         st.error("Please paste a Job Description.")
-    elif not ai_connected:
-        st.error("AI not connected. Check your API key in Secrets.")
+    elif groq_client is None:
+        st.error("AI not connected. Check your GROQ_API_KEY in Secrets.")
     else:
         with st.spinner("Tailoring your CV to the job description... this takes ~15 seconds."):
             st.session_state.tailored_content = tailor_cv(
+                groq_client,
                 st.session_state.raw_cv_text,
                 job_desc,
                 style=style_choice
@@ -1310,7 +1177,12 @@ if st.session_state.tailored_content:
                 with open(photo_path, "wb") as f:
                     f.write(uploaded_photo.getbuffer())
 
-            pdf_bytes = build_pdf(st.session_state.tailored_content, style_choice, photo_path=photo_path, photo_size=st.session_state.photo_size)
+            pdf_bytes = build_pdf(
+                st.session_state.tailored_content,
+                style_choice,
+                photo_path=photo_path,
+                photo_size=st.session_state.photo_size
+            )
 
             if photo_path and os.path.exists(photo_path):
                 try: os.remove(photo_path)
