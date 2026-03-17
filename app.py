@@ -304,24 +304,37 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
 
 def fix_company_markers(text: str) -> str:
     """
-    Post-processor: normalises any AI company header variant to ##COMPANY## Name.
-    The AI produces: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY##Foo' etc.
-    All are mapped to '##COMPANY## Foo Bar - City'.
+    Normalises ALL AI company header variants to '##COMPANY## Name'.
+    Llama outputs many formats including:
+      'COMPANYMorgan Stanley', '#CompanyMorgan Stanley', '##COMPANY##Morgan Stanley',
+      '**COMPANY** Morgan Stanley', '## COMPANY ## Morgan Stanley', etc.
+    Strategy: strip all leading #/*/ chars, then check if the word COMPANY appears
+    at the START of what remains (with optional trailing hashes/spaces/colons).
     """
-    # Catches ALL variants: 'COMPANYFoo', 'COMPANY Foo', '##COMPANYFoo', '##COMPANY## Foo'
-    company_re = re.compile(
-        r'^(?:#+\s*COMPANY\s*#+\s*|#+\s*COMPANY\s*|COMPANY\s*)',
-        re.IGNORECASE
-    )
     result = []
     for line in text.split('\n'):
         s = line.strip()
-        m = company_re.match(s)
+        # Remove markdown bold/italic wrappers first
+        s_clean = re.sub(r'\*+', '', s).strip()
+        # Strip all leading # characters
+        s_stripped = s_clean.lstrip('#').strip()
+
+        # Now check: does this line START with the word "COMPANY" (case-insensitive)?
+        m = re.match(r'^COMPANY\s*[#:\-]?\s*(.+)$', s_stripped, re.IGNORECASE)
         if m:
-            name = s[m.end():].strip()
+            name = m.group(1).strip().lstrip('#: -')
+            if name:
+                result.append(f'##COMPANY## {name}')
+                continue
+
+        # Already correctly formatted
+        if s.startswith('##COMPANY##'):
+            name = s[len('##COMPANY##'):].strip()
             result.append(f'##COMPANY## {name}' if name else line)
-        else:
-            result.append(line)
+            continue
+
+        result.append(line)
+
     return '\n'.join(result)
 
 
@@ -602,6 +615,253 @@ def crop_to_circle(image_path: str) -> str:
 
 class PDF(FPDF):
     pass
+
+
+def build_docx(content: str) -> bytes:
+    """
+    Converts the tailored CV text into a clean, ATS-friendly DOCX file.
+    Uses python-docx with professional formatting matching Jake's Resume style.
+    Works for both India (single column) and Global (text only, no sidebar) outputs.
+    """
+    from docx import Document as DocxDocument
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    import copy
+
+    doc = DocxDocument()
+
+    # ── Page margins: 0.75 inch all sides ────────────────────────────────────
+    section = doc.sections[0]
+    margin = Inches(0.75)
+    section.top_margin    = margin
+    section.bottom_margin = margin
+    section.left_margin   = margin
+    section.right_margin  = margin
+
+    # ── Default paragraph spacing: no space after ────────────────────────────
+    style = doc.styles['Normal']
+    style.font.name = 'Calibri'
+    style.font.size = Pt(10)
+    pfmt = style.paragraph_format
+    pfmt.space_after  = Pt(0)
+    pfmt.space_before = Pt(0)
+
+    def add_para(text='', bold=False, italic=False, size=10, align=WD_ALIGN_PARAGRAPH.LEFT,
+                 space_before=0, space_after=2, color=None, indent_left=0):
+        p = doc.add_paragraph()
+        p.alignment = align
+        pf = p.paragraph_format
+        pf.space_before = Pt(space_before)
+        pf.space_after  = Pt(space_after)
+        if indent_left:
+            pf.left_indent = Inches(indent_left)
+        if text:
+            run = p.add_run(text)
+            run.bold   = bold
+            run.italic = italic
+            run.font.size = Pt(size)
+            run.font.name = 'Calibri'
+            if color:
+                run.font.color.rgb = RGBColor(*color)
+        return p
+
+    def add_rule(color_hex='000000'):
+        """Add a thin horizontal rule under a section header."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(2)
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '6')
+        bottom.set(qn('w:space'), '1')
+        bottom.set(qn('w:color'), color_hex)
+        pBdr.append(bottom)
+        pPr.append(pBdr)
+        return p
+
+    def add_two_col_run(p, left_text, left_bold, right_text, right_italic=True):
+        """Add bold left text + italic right text on same paragraph line with tab."""
+        p.clear()
+        # Tab stop at right margin
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Inches
+        pPr = p._p.get_or_add_pPr()
+        tabs = OxmlElement('w:tabs')
+        tab = OxmlElement('w:tab')
+        tab.set(qn('w:val'), 'right')
+        tab.set(qn('w:pos'), '9072')   # 6.3 inches in twentieths of a pt
+        tabs.append(tab)
+        pPr.append(tabs)
+        run_l = p.add_run(left_text)
+        run_l.bold = left_bold
+        run_l.font.size = Pt(10.5)
+        run_l.font.name = 'Calibri'
+        run_tab = p.add_run('\t')
+        run_tab.font.name = 'Calibri'
+        run_r = p.add_run(right_text)
+        run_r.italic = right_italic
+        run_r.font.size = Pt(9.5)
+        run_r.font.name = 'Calibri'
+        run_r.font.color.rgb = RGBColor(100, 100, 100)
+
+    # ── Parse and render ──────────────────────────────────────────────────────
+    text = content.replace('[SIDEBAR_START]', '').replace('[MAIN_START]', '')
+    lines = [l.rstrip() for l in text.split('\n')]
+
+    SKIP_WORDS = {'NAME', 'CONTACT', 'SIDEBAR_START', 'MAIN_START'}
+    NAVY = (18, 40, 76)
+
+    # Find name and contact
+    name_line = next((l.strip() for l in lines
+                      if l.strip() and l.strip() not in SKIP_WORDS
+                      and l.strip() != 'INTRODUCTION'
+                      and '|' not in l.strip()
+                      and not l.strip().startswith('-')), '')
+    contact_line = next((l.strip() for l in lines
+                         if ('@' in l or l.strip().startswith('+') or
+                             re.search(r'\d{7,}', l))
+                         and l.strip() != name_line), '')
+
+    name_done    = False
+    contact_done = False
+    intro_mode   = False
+    in_experience = False
+
+    for line in lines:
+        line = line.strip()
+
+        if line in SKIP_WORDS:
+            continue
+
+        if not line:
+            continue
+
+        # NAME
+        if not name_done and line == name_line:
+            p = add_para(line.title(), bold=True, size=20,
+                         align=WD_ALIGN_PARAGRAPH.CENTER,
+                         space_before=0, space_after=2)
+            name_done = True
+            continue
+
+        # CONTACT
+        if name_done and not contact_done and line == contact_line:
+            add_para(line, italic=False, size=9,
+                     align=WD_ALIGN_PARAGRAPH.CENTER,
+                     color=(80, 80, 80), space_after=3)
+            contact_done = True
+            continue
+
+        # INTRODUCTION keyword
+        if line == 'INTRODUCTION':
+            intro_mode = True
+            continue
+
+        # Intro paragraph text
+        if intro_mode:
+            if (line.isupper() and len(line) > 3 and '|' not in line) or line.startswith('##'):
+                intro_mode = False
+                # fall through
+            else:
+                add_para(line, italic=True, size=9, color=(60, 60, 60), space_after=1)
+                continue
+
+        # ##COMPANY## header
+        if line.startswith('##COMPANY##'):
+            company_name = line.replace('##COMPANY##', '').strip()
+            in_experience = True
+            p = add_para(company_name.upper(), bold=True, size=11,
+                         color=NAVY, space_before=8, space_after=0)
+            add_rule('000000')
+            continue
+
+        # SECTION HEADER
+        if (line.isupper() and 3 < len(line) <= 35
+                and '|' not in line and line not in SKIP_WORDS
+                and not any(c.isdigit() for c in line)):
+            in_experience = 'EXPERIENCE' in line
+            p = add_para(line, bold=True, size=10.5,
+                         color=NAVY, space_before=8, space_after=0)
+            add_rule('000000')
+            continue
+
+        # PIPE LINE: role, sub-role, or project
+        if '|' in line and not line.startswith('-'):
+            parts = [p.strip() for p in line.split('|')]
+
+            if len(parts) >= 3:
+                # Flat role: Title | Company - City | Dates
+                title, company, dates = parts[0], parts[1], parts[2]
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after  = Pt(0)
+                add_two_col_run(p, title, True, dates)
+                add_para(company, italic=True, size=9.5, color=(60, 60, 60), space_after=1)
+
+            elif len(parts) == 2:
+                p0, p1 = parts[0], parts[1]
+                is_date = bool(re.search(
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
+                if is_date:
+                    # Sub-role under ##COMPANY##
+                    p = doc.add_paragraph()
+                    p.paragraph_format.space_before = Pt(3)
+                    p.paragraph_format.space_after  = Pt(0)
+                    p.paragraph_format.left_indent  = Inches(0.15)
+                    add_two_col_run(p, p0, True, p1)
+                else:
+                    # Project: Name | Tech Stack
+                    p = doc.add_paragraph()
+                    p.paragraph_format.space_before = Pt(3)
+                    p.paragraph_format.space_after  = Pt(0)
+                    add_two_col_run(p, p0, True, p1)
+            continue
+
+        # SKILL LINE "Category: items"
+        if ':' in line and not line.startswith('-'):
+            colon_idx = line.index(':')
+            cat = line[:colon_idx].strip()
+            det = line[colon_idx + 1:].strip()
+            if cat and det and len(cat.split()) <= 5:
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after  = Pt(1)
+                run_cat = p.add_run(cat + ': ')
+                run_cat.bold = True
+                run_cat.font.size = Pt(9.5)
+                run_cat.font.name = 'Calibri'
+                run_det = p.add_run(det)
+                run_det.font.size = Pt(9.5)
+                run_det.font.name = 'Calibri'
+                continue
+
+        # BULLET
+        if line.startswith('-'):
+            content_text = line[1:].lstrip()
+            indent = 0.25 if in_experience else 0.15
+            p = doc.add_paragraph(style='Normal')
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after  = Pt(1)
+            p.paragraph_format.left_indent  = Inches(indent)
+            p.paragraph_format.first_line_indent = Inches(-0.15)
+            run = p.add_run('\u2022  ' + content_text)
+            run.font.size = Pt(9.5)
+            run.font.name = 'Calibri'
+            continue
+
+        # REGULAR TEXT (intro sentences etc.)
+        add_para(line, size=9.5, color=(50, 50, 50), space_after=1)
+
+    # ── Save to bytes ─────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def build_pdf(content: str, style: str, photo_path: str = None, photo_size: int = 52) -> bytes:
@@ -972,26 +1232,26 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
 def _build_india_pdf(pdf: FPDF, text: str):
     """
-    Jake Resume ATS layout.
-    KEY FIX: set_auto_page_break(True) so multi_cell / content naturally
-    flows to page 2. Section header orphan prevention: if < 30mm left,
-    start a new page before printing the header.
+    Jake Resume — strict 1-page ATS layout.
+    Uses manual overflow control instead of FPDF auto page break.
+    All spacing reduced to pack content tightly within one page.
     """
-    MARGIN   = 12.7
+    MARGIN   = 10.0          # reduced from 12.7 to gain ~5mm each side
     PAGE_W   = 210
     PAGE_H   = 297
     TEXT_W   = PAGE_W - 2 * MARGIN
-    BULLET_X = MARGIN + 4
-    BULLET_W = TEXT_W - 4
+    BULLET_X = MARGIN + 3
+    BULLET_W = TEXT_W - 3
+    BOTTOM   = PAGE_H - MARGIN   # hard bottom limit
 
     BLACK     = (0,   0,   0)
     DARK_GREY = (50,  50,  50)
     MID_GREY  = (110, 110, 110)
 
     SKIP_WORDS = {"NAME", "CONTACT", "SIDEBAR_START", "MAIN_START"}
-    # INTRODUCTION is NOT skipped — it's rendered as a paragraph below contact
 
-    pdf.set_auto_page_break(auto=True, margin=MARGIN)
+    # Disable auto page break — we control overflow manually
+    pdf.set_auto_page_break(auto=False)
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
     pdf.set_top_margin(MARGIN)
@@ -1018,24 +1278,30 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
     name_printed    = False
     contact_printed = False
-    intro_mode      = False   # True when we're collecting intro paragraph lines
+    intro_mode      = False
     in_experience   = False
 
-    def draw_rule(thickness=0.35):
+    def fits(needed_mm=5):
+        """True if there's enough space left on the page."""
+        return pdf.get_y() + needed_mm < BOTTOM
+
+    def draw_rule(thickness=0.3):
+        if not fits(1): return
         pdf.set_draw_color(*BLACK)
         pdf.set_line_width(thickness)
         pdf.line(MARGIN, pdf.get_y(), MARGIN + TEXT_W, pdf.get_y())
         pdf.set_line_width(0.2)
 
-    def space_left():
-        return PAGE_H - MARGIN - pdf.get_y()
-
     for raw_line in lines:
         line = raw_line.strip()
 
+        # Hard stop — nothing renders past the page bottom
+        if not fits(3):
+            break
+
         if not line:
-            if name_printed:
-                pdf.ln(1.0)
+            if name_printed and fits(2):
+                pdf.ln(0.8)   # tighter blank line gap
             continue
 
         if line in SKIP_WORDS:
@@ -1043,62 +1309,58 @@ def _build_india_pdf(pdf: FPDF, text: str):
 
         # NAME
         if not name_printed and line == name_line:
-            # Always Title Case — handles "UDAY KATARE", "uday katare", or "Uday Katare"
             display_name = line.title()
-            pdf.set_font("Arial", "B", 20)
+            pdf.set_font("Arial", "B", 18)   # 18pt vs 20pt — saves 1.5mm
             pdf.set_text_color(*BLACK)
             pdf.set_x(MARGIN)
-            pdf.cell(TEXT_W, 9, display_name, ln=True, align="C")
+            pdf.cell(TEXT_W, 8, display_name, ln=True, align="C")
             name_printed = True
             continue
 
         # CONTACT
         if name_printed and not contact_printed and line == contact_line:
-            pdf.set_font("Arial", "", 9)
+            pdf.set_font("Arial", "", 8.5)
             pdf.set_text_color(*DARK_GREY)
             pdf.set_x(MARGIN)
-            pdf.multi_cell(TEXT_W, 4.5, line, align="C")
+            pdf.multi_cell(TEXT_W, 4, line, align="C")
             pdf.set_draw_color(*MID_GREY)
-            pdf.set_line_width(0.25)
+            pdf.set_line_width(0.2)
             pdf.line(MARGIN, pdf.get_y() + 0.5, MARGIN + TEXT_W, pdf.get_y() + 0.5)
             pdf.set_line_width(0.2)
-            pdf.ln(3.5)
+            pdf.ln(2.5)
             contact_printed = True
             continue
 
-        # INTRODUCTION keyword → enter intro mode
+        # INTRODUCTION keyword
         if line == "INTRODUCTION":
             intro_mode = True
-            pdf.ln(2)
+            pdf.ln(1.5)
             continue
 
-        # Intro paragraph lines — render as small italic text, exit mode on next section header
+        # Intro paragraph
         if intro_mode:
-            # Exit intro mode when hitting a new ALL-CAPS section or ## marker
             if (line.isupper() and len(line) > 3 and "|" not in line) or line.startswith("##"):
                 intro_mode = False
-                # Fall through to render this line normally (don't skip it)
+                # fall through
             else:
-                pdf.set_x(MARGIN)
-                pdf.set_font("Arial", "I", 9)
-                pdf.set_text_color(*DARK_GREY)
-                pdf.multi_cell(TEXT_W, 4.8, line, align="L")
+                if fits(5):
+                    pdf.set_x(MARGIN)
+                    pdf.set_font("Arial", "I", 8.5)
+                    pdf.set_text_color(*DARK_GREY)
+                    pdf.multi_cell(TEXT_W, 4, line, align="L")
                 continue
 
-        # ##COMPANY## HEADER — promotion-stacked company block
+        # ##COMPANY## HEADER
         if line.startswith("##COMPANY##"):
             company_name = line.replace("##COMPANY##", "").strip()
-            if space_left() < 45:
-                pdf.add_page()
-                pdf.set_y(MARGIN)
-            else:
-                pdf.ln(4)
+            if fits(30):
+                pdf.ln(3)
             pdf.set_x(MARGIN)
-            pdf.set_font("Arial", "B", 11)
+            pdf.set_font("Arial", "B", 10.5)
             pdf.set_text_color(*BLACK)
-            pdf.cell(TEXT_W, 6, company_name.upper(), ln=True)
-            draw_rule(0.5)
-            pdf.ln(1.5)
+            pdf.cell(TEXT_W, 5, company_name.upper(), ln=True)
+            draw_rule(0.4)
+            pdf.ln(1)
             continue
 
         # SECTION HEADER
@@ -1107,128 +1369,118 @@ def _build_india_pdf(pdf: FPDF, text: str):
                 and "|" not in line
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            # Track experience section
             in_experience = ("EXPERIENCE" in line)
-            if space_left() < 45:
-                pdf.add_page()
-                pdf.set_y(MARGIN)
-            else:
-                pdf.ln(5)
+            if fits(30):
+                pdf.ln(4)
             pdf.set_x(MARGIN)
-            pdf.set_font("Arial", "B", 10.5)
+            pdf.set_font("Arial", "B", 10)
             pdf.set_text_color(*BLACK)
-            pdf.cell(TEXT_W, 5, line, ln=True, align="L")
-            draw_rule(0.35)
-            pdf.ln(2.5)
+            pdf.cell(TEXT_W, 4.5, line, ln=True, align="L")
+            draw_rule(0.3)
+            pdf.ln(2)
             continue
 
-        # ── ROLE / PROJECT PIPE LINE ──────────────────────────────────────────
+        # ROLE / PROJECT PIPE LINE
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
-            pdf.ln(2.5)
+            if fits(5):
+                pdf.ln(2)
 
             if len(parts) >= 3:
-                # 3-part: Title | Company - City | Dates  (flat role)
                 title, company, dates = parts[0], parts[1], parts[2]
-                pdf.set_font("Arial", "B", 10.5)
+                pdf.set_font("Arial", "B", 10)
                 pdf.set_text_color(*BLACK)
                 tw = min(pdf.get_string_width(title) + 2, TEXT_W * 0.74)
                 pdf.set_x(MARGIN)
-                pdf.cell(tw, 5, title, ln=0)
-                pdf.set_font("Arial", "I", 9.5)
+                pdf.cell(tw, 4.5, title, ln=0)
+                pdf.set_font("Arial", "I", 9)
                 pdf.set_text_color(*MID_GREY)
-                pdf.cell(TEXT_W - tw, 5, dates, ln=1, align="R")
+                pdf.cell(TEXT_W - tw, 4.5, dates, ln=1, align="R")
                 pdf.set_x(MARGIN)
-                pdf.set_font("Arial", "I", 9.5)
+                pdf.set_font("Arial", "I", 9)
                 pdf.set_text_color(*DARK_GREY)
-                pdf.cell(TEXT_W, 4.5, company, ln=True)
+                pdf.cell(TEXT_W, 4, company, ln=True)
 
             elif len(parts) == 2:
                 p0, p1 = parts[0], parts[1]
-                # Is p1 a date range? Check for year digits or "Present"
                 is_date = bool(re.search(
-                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec',
-                    p1
-                ))
+                    r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
                 if is_date:
-                    # Sub-role under ##COMPANY## header: "Title | Start - End"
-                    ROLE_X = MARGIN + 3
-                    ROLE_W = TEXT_W - 3
+                    # Sub-role
                     pdf.set_font("Arial", "B", 10)
                     pdf.set_text_color(*BLACK)
-                    tw = min(pdf.get_string_width(p0) + 2, ROLE_W * 0.74)
-                    pdf.set_x(ROLE_X)
-                    pdf.cell(tw, 5, p0, ln=0)
+                    tw = min(pdf.get_string_width(p0) + 2, TEXT_W * 0.74)
+                    pdf.set_x(MARGIN + 2)
+                    pdf.cell(tw, 4.5, p0, ln=0)
                     pdf.set_font("Arial", "I", 9)
                     pdf.set_text_color(*MID_GREY)
-                    pdf.cell(ROLE_W - tw, 5, p1, ln=1, align="R")
+                    pdf.cell(TEXT_W - tw - 2, 4.5, p1, ln=1, align="R")
                 else:
-                    # Project: "Name | Tech Stack"
-                    proj_name  = p0
-                    tech_stack = p1
-                    pdf.set_font("Arial", "B", 10.5)
+                    # Project
+                    proj_name, tech_stack = p0, p1
+                    pdf.set_font("Arial", "B", 10)
                     name_w = pdf.get_string_width(proj_name) + 2
                     pdf.set_font("Arial", "I", 9)
                     tech_w = pdf.get_string_width(tech_stack) + 2
                     pdf.set_x(MARGIN)
                     if name_w + tech_w + 4 <= TEXT_W:
-                        gap_w = TEXT_W - name_w - tech_w
-                        pdf.set_font("Arial", "B", 10.5)
+                        pdf.set_font("Arial", "B", 10)
                         pdf.set_text_color(*BLACK)
-                        pdf.cell(name_w, 5, proj_name, ln=0)
-                        pdf.cell(gap_w, 5, "", ln=0)
+                        pdf.cell(name_w, 4.5, proj_name, ln=0)
+                        pdf.cell(TEXT_W - name_w - tech_w, 4.5, "", ln=0)
                         pdf.set_font("Arial", "I", 9)
                         pdf.set_text_color(*MID_GREY)
-                        pdf.cell(tech_w, 5, tech_stack, ln=1, align="R")
+                        pdf.cell(tech_w, 4.5, tech_stack, ln=1, align="R")
                     else:
-                        pdf.set_font("Arial", "B", 10.5)
+                        pdf.set_font("Arial", "B", 10)
                         pdf.set_text_color(*BLACK)
-                        pdf.multi_cell(TEXT_W, 5, proj_name, align="L")
+                        pdf.multi_cell(TEXT_W, 4.5, proj_name, align="L")
                         pdf.set_x(MARGIN)
                         pdf.set_font("Arial", "I", 9)
                         pdf.set_text_color(*MID_GREY)
-                        pdf.multi_cell(TEXT_W, 4.5, tech_stack, align="L")
+                        pdf.multi_cell(TEXT_W, 4, tech_stack, align="L")
             else:
-                pdf.set_font("Arial", "B", 10.5)
+                pdf.set_font("Arial", "B", 10)
                 pdf.set_text_color(*BLACK)
                 pdf.set_x(MARGIN)
-                pdf.cell(TEXT_W, 5, parts[0], ln=True)
+                pdf.cell(TEXT_W, 4.5, parts[0], ln=True)
 
             pdf.set_text_color(*BLACK)
             continue
 
-        # SKILL LINE
+        # SKILL LINE  "Category: items"
         if ":" in line and not line.startswith("-"):
             colon_idx = line.index(":")
             cat = line[:colon_idx].strip()
             det = line[colon_idx + 1:].strip()
             if cat and det and len(cat.split()) <= 5:
                 pdf.set_x(MARGIN)
-                pdf.set_font("Arial", "B", 9.5)
+                pdf.set_font("Arial", "B", 9)
                 pdf.set_text_color(*BLACK)
-                lw = min(pdf.get_string_width(cat + ":  ") + 1, TEXT_W * 0.40)
-                pdf.cell(lw, 4.5, cat + ": ", ln=0)
-                pdf.set_font("Arial", "", 9.5)
-                pdf.multi_cell(TEXT_W - lw, 4.5, det, align="L")
+                lw = min(pdf.get_string_width(cat + ":  ") + 1, TEXT_W * 0.38)
+                pdf.cell(lw, 4, cat + ": ", ln=0)
+                pdf.set_font("Arial", "", 9)
+                pdf.multi_cell(TEXT_W - lw, 4, det, align="L")
                 continue
 
         # BULLET
         if line.startswith("- ") or line.startswith("-"):
             content = line[1:].lstrip()
-            # Extra indent inside experience block (under sub-roles)
-            x_pos = BULLET_X + 3 if in_experience else BULLET_X
-            w     = BULLET_W - 3 if in_experience else BULLET_W
-            pdf.set_font("Arial", "", 9.5)
-            pdf.set_text_color(*BLACK)
-            pdf.set_x(x_pos)
-            pdf.multi_cell(w, 4.5, "\x95 " + content, align="L")
+            x_pos = BULLET_X + 2 if in_experience else BULLET_X
+            w     = BULLET_W - 2 if in_experience else BULLET_W
+            if fits(4):
+                pdf.set_font("Arial", "", 9)
+                pdf.set_text_color(*BLACK)
+                pdf.set_x(x_pos)
+                pdf.multi_cell(w, 4, "\x95 " + content, align="L")
             continue
 
         # REGULAR TEXT
-        pdf.set_font("Arial", "", 9.5)
-        pdf.set_text_color(*BLACK)
-        pdf.set_x(MARGIN)
-        pdf.multi_cell(TEXT_W, 4.5, line, align="L")
+        if fits(4):
+            pdf.set_font("Arial", "", 9)
+            pdf.set_text_color(*BLACK)
+            pdf.set_x(MARGIN)
+            pdf.multi_cell(TEXT_W, 4, line, align="L")
 
 
 # ==============================================================================
@@ -1238,7 +1490,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
 st.markdown("""
 <div class="main-header">
     <h1>🃏 BeTheJack</h1>
-    <p>Upload your real CV → tailor it to any job — no BS, no fabrication.</p>
+    <p>Upload your real CV → tailor it to any job, instantly.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1372,9 +1624,11 @@ if st.session_state.tailored_content:
     )
     st.session_state.tailored_content = edited
 
-    col_pdf, col_dl = st.columns([1, 2])
+    col_pdf, col_docx, col_spacer = st.columns([1, 1, 1])
     with col_pdf:
         render_btn = st.button("📄 Render PDF", type="secondary", use_container_width=True)
+    with col_docx:
+        docx_btn = st.button("📝 Download DOCX", type="secondary", use_container_width=True)
 
     if render_btn:
         with st.spinner("Building your PDF..."):
@@ -1402,9 +1656,26 @@ if st.session_state.tailored_content:
             use_container_width=True
         )
 
+    if docx_btn:
+        with st.spinner("Building your DOCX..."):
+            try:
+                docx_bytes = build_docx(st.session_state.tailored_content)
+                safe_title = re.sub(r'[^a-zA-Z0-9]', '_', job_desc[:25]) if job_desc else "Resume"
+                docx_filename = f"CV_{safe_title}.docx"
+                st.success("✅ DOCX is ready!")
+                st.download_button(
+                    label="📥 Download DOCX",
+                    data=docx_bytes,
+                    file_name=docx_filename,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"DOCX generation failed: {e}")
+
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align:center;color:#888;font-size:0.8rem;'>BeTheJack · Tailors real CVs to real jobs · No fabrication, ever.</div>",
+    "<div style='text-align:center;color:#888;font-size:0.8rem;'>BeTheJack · Smart CV tailoring, powered by AI.</div>",
     unsafe_allow_html=True
 )
