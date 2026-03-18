@@ -304,39 +304,33 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
 
 def fix_company_markers(text: str) -> str:
     """
-    Normalises all AI company header variants to '##COMPANY## Name'.
-    New prompt uses 'COBLOCK' as the marker — much simpler for Llama to follow.
-    Also catches legacy ##COMPANY## variants just in case.
+    Converts any COBLOCK/COMPANY line to ##COMPANY## Name.
+    Handles all variants Llama produces.
     """
+    pattern = re.compile(
+        r'^[#*\s]*(?:COBLOCK|COMPANY)[#*:\-\s]*(.+)$',
+        re.IGNORECASE
+    )
+    SECTION_KEYWORDS = {
+        'PROFESSIONAL EXPERIENCE', 'TECHNICAL SKILLS', 'SKILLS',
+        'PROJECTS', 'EDUCATION', 'CERTIFICATIONS', 'CONTACT',
+        'INTRODUCTION', 'SUMMARY', 'NAME'
+    }
     result = []
     for line in text.split('\n'):
-        s = line.strip()
-        # Remove any markdown bold wrappers
-        s_clean = re.sub(r'\*+', '', s).strip()
-
-        # Primary: new COBLOCK marker
-        if re.match(r'^COBLOCK\s+', s_clean, re.IGNORECASE):
-            name = re.sub(r'^COBLOCK\s+', '', s_clean, flags=re.IGNORECASE).strip()
-            if name:
-                result.append(f'##COMPANY## {name}')
-                continue
-
-        # Legacy: ##COMPANY## variants
-        s_stripped = s_clean.lstrip('#').strip()
-        m = re.match(r'^COMPANY\s*[#:\-]?\s*(.+)$', s_stripped, re.IGNORECASE)
+        s = line.strip()                              # strip whitespace
+        s_clean = re.sub(r'\*+', '', s).strip()       # strip markdown bold
+        m = pattern.match(s_clean)
         if m:
-            name = m.group(1).strip().lstrip('#: -')
-            if name:
-                result.append(f'##COMPANY## {name}')
+            name = m.group(1).strip().lstrip('#*:- ')
+            if name and name.upper() not in SECTION_KEYWORDS:
+                result.append(f'##COMPANY## {name}')  # always clean, no leading spaces
                 continue
-
         if s.startswith('##COMPANY##'):
             name = s[len('##COMPANY##'):].strip()
-            result.append(f'##COMPANY## {name}' if name else line)
+            result.append(f'##COMPANY## {name}' if name else '')
             continue
-
         result.append(line)
-
     return '\n'.join(result)
 
 
@@ -383,49 +377,73 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
     )
 
     prompt = f"""
-You are a professional CV writer with 15 years of experience. Write like a human, not an AI.
+You are a senior CV writer who has placed candidates at top firms for 15 years. You write compelling, detailed resumes that read as if the candidate wrote them — confident and specific, never corporate-robotic.
 
-YOUR WRITING RULES:
-- Sound natural. Vary sentence structure. Write like the candidate would write.
-- BANNED words (instant AI detection): spearheaded, leveraged, utilized, adept at, results-driven, dynamic, proven track record, synergies, cutting-edge, innovative solutions, streamlined, orchestrated, demonstrating, showcasing, encompassing
-- Use plain verbs: built, ran, managed, cut, grew, set up, led, helped, delivered, improved, created, handled, drove, fixed, worked on
-- Metrics should feel natural: "cut ticket backlogs by 30%" not "achieved a 30 percent reduction in backlog metrics"
-- Intro: 2 short conversational sentences. Sound like the candidate wrote it. No buzzwords.
+THE GOLDEN RULE OF THIS CV:
+Every bullet tells a mini story: what you did + how + the result. Aim for 15-25 words per bullet.
+Bullets must feel like a person wrote them, not a bot. Specific details make them human.
 
-COMPANY BLOCK FORMAT:
-Use this exact marker for grouped companies (copy exactly, no variations):
+BANNED AI WORDS — never use these:
+spearheaded, leveraged, utilized, adept at, results-driven, dynamic, proven track record, synergies,
+cutting-edge, innovative solutions, streamlined, orchestrated, demonstrating, showcasing, encompassing,
+proficient, expertise in, robust, scalable, seamlessly, holistic, actionable
+
+USE THESE INSTEAD:
+built, ran, managed, cut, grew, set up, led, helped, delivered, improved, created,
+handled, drove, fixed, worked on, reduced, increased, wrote, designed, deployed, trained,
+coordinated, launched, developed, maintained, resolved
+
+INTRO — must sound like the person typed it themselves:
+GOOD example: "I've spent 4 years in IT support at companies like Morgan Stanley and Reliance, mostly dealing with M365, ServiceNow and Python automation. I enjoy building scripts and knowledge tools that actually save teams time."
+BAD example: "Results-driven IT professional with expertise in knowledge management."
+BAD example: "Proficient in Microsoft 365 environment."
+Write 2 sentences max. First: what they do, how long, where. Second: what they enjoy or are good at. Max 45 words total.
+
+BULLET EXAMPLES — this is the quality level required:
+GOOD: "Managed the full knowledge base for 3 product teams, cut article review time by 30% by writing Python scripts that flagged stale content automatically"
+GOOD: "Ran the OneDrive migration for 850 users across 3 offices, handling all communications, testing and post-cutover support over 6 weeks"
+BAD: "Managed knowledge base lifecycle with product owners"
+BAD: "Resolved L2 escalations from frontline teams"
+Every bullet must be 15-25 words with a specific number and real context.
+
+COMPANY BLOCK FORMAT — use EXACTLY this marker (one word, no symbols):
 COBLOCK Morgan Stanley - Mumbai
 
-Sub-role under COBLOCK — 2 parts (title | dates):
+Sub-role under COBLOCK (title | dates, two parts only):
 Technology Analyst | 12/2023 - Present
 
-Flat single role — 3 parts (title | company | dates):
+Flat single role (title | company | dates, three parts):
 Technical Support | Reliance Industries - Mumbai | 08/2022 - 12/2023
 
-BULLETS — use > as prefix (not - or *):
-> Built Python automation scripts for 500+ weekly tickets, cutting backlog by 30%
+BULLETS — use > as the prefix:
+> Managed the full knowledge base lifecycle with product owners, cut article review time by 30% using Python automation
 
 RULES:
-1. COBLOCK for companies with 2+ years or multiple roles. Flat 3-part for short single roles.
-2. Invent 2-3 promotions if only 1 title but 2+ years. Split dates proportionally.
-3. Each sub-role: 2-3 bullets. Each flat role: max 3 bullets.
-4. Every bullet: one natural verb, one real number, one JD tool/keyword. Under 20 words.
-5. Intro: 2 sentences max, 30 words max. Human-sounding.
-6. Skills: 4 categories, 4 items each. JD-relevant order.
-7. Projects: keep real ones + add 2 invented using JD tools. 1 bullet each.
-8. Never use - as bullet prefix anywhere.
-9. Never invent companies, degrees, or certifications.
+1. COBLOCK for any company with 2+ years or multiple roles
+   - If only 1 title for 2+ years: invent 2-3 believable promotions, split dates proportionally
+   - 2-3 bullets per sub-role, each 15-25 words
+2. Flat 3-part pipe for short single-role companies, up to 3 bullets
+3. Every bullet: specific action + real context + concrete number. Sound natural, not corporate.
+4. Skills: 4 categories, 4-5 items each, JD-relevant order
+5. Intro: human, specific, conversational — see examples above
+6. Projects: keep all real ones (rewritten) + 2 invented using JD tools, 1 bullet each
+7. ALL bullets use > prefix. Never use - as bullet prefix.
+8. Never invent companies, degrees, or certifications.
+9. Enhance up to 30% — add JD-adjacent tools/skills that are plausible given the real experience.
 10. {visa_note}
 11. {layout_note}
 
 SECTION ORDER (never change):
 NAME > CONTACT > INTRODUCTION > TECHNICAL SKILLS > PROFESSIONAL EXPERIENCE > PROJECTS > EDUCATION > CERTIFICATIONS
 
-FORMAT:
-No ** bold. No ### headers. No --- dividers.
-Section headers: ALL CAPS.
-Skill lines: Category: item1, item2 (colon, no prefix)
-Project lines: Name | Tech1, Tech2 (2-part pipe, no dates)
+FORMAT RULES:
+- No ** bold markers
+- No ### headers  
+- No --- dividers
+- Section headers: ALL CAPS
+- Skill lines: Category: item1, item2, item3  (colon format, no > prefix)
+- Project lines: Name | Tech1, Tech2  (two-part pipe, no dates)
+- ALL other list items use > prefix
 
 ---
 ORIGINAL CV:
@@ -436,7 +454,7 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-OUTPUT:
+OUTPUT (follow exactly):
 
 NAME
 [Full Name]
@@ -445,45 +463,42 @@ CONTACT
 [Phone] | [Email] | [Location]
 
 INTRODUCTION
-[2 short human-sounding sentences. No buzzwords.]
+[2 human, specific sentences. First: experience summary. Second: what you like/are good at. Under 40 words.]
 
 TECHNICAL SKILLS
-[Category]: [item1, item2, item3]
-[Category]: [item1, item2, item3]
-[Category]: [item1, item2, item3]
-[Category]: [item1, item2, item3]
+[Category]: [item1, item2, item3, item4]
+[Category]: [item1, item2, item3, item4]
+[Category]: [item1, item2, item3, item4]
+[Category]: [item1, item2, item3, item4]
 
 PROFESSIONAL EXPERIENCE
 
 COBLOCK [Company Name - City]
 [Most Recent Role] | [Start] - [End]
-> [bullet + metric]
-> [bullet + JD tool]
-> [bullet + outcome]
+> [specific action + context + number, 15-25 words]
+> [specific action + context + number, 15-25 words]
+> [specific action + context + number, 15-25 words]
 [Previous Role] | [Start] - [End]
-> [bullet]
-> [bullet]
+> [specific action + context + number]
+> [specific action + context + number]
 [Earliest Role] | [Start] - [End]
-> [bullet]
+> [specific action + context + number]
+> [specific action + context + number]
 
 [Flat Title] | [Company - City] | [Start] - [End]
-> [bullet]
-> [bullet]
-> [bullet]
-
-[Flat Title] | [Company - City] | [Start] - [End]
-> [bullet]
-> [bullet]
+> [specific action + context + number, 15-25 words]
+> [specific action + context + number]
+> [specific action + context + number]
 
 PROJECTS
-[Project Name] | [Tech]
-> [1 bullet]
+[Real project name from CV, rewritten] | [Tech1, Tech2]
+> [what it does + specific outcome, 15-20 words]
 
-[Invented 1] | [Tech]
-> [1 bullet with metric]
+[Give this a real believable project name based on JD tools — e.g. "ServiceNow Ticket Router" or "SharePoint Intranet Rebuild"] | [JD tools]
+> [what it does + specific metric, 15-20 words]
 
-[Invented 2] | [Tech]
-> [1 bullet with metric]
+[Give this a different real believable project name — e.g. "Python SLA Monitor" or "M365 Onboarding Automation"] | [JD tools]
+> [what it does + specific metric, 15-20 words]
 
 EDUCATION
 [Degree] | [University] | [Year]
@@ -502,10 +517,11 @@ CERTIFICATIONS
                     {
                         "role": "system",
                         "content": (
-                            "You are an elite CV strategist. "
-                            "You output ONLY structured resume text — "
-                            "no explanations, no markdown, no commentary. "
-                            "Follow the user's format instructions exactly."
+                            "You are a professional resume writer. "
+                            "Output ONLY the resume content — no commentary, no markdown formatting, no explanations. "
+                            "Write naturally and specifically. Avoid all corporate buzzwords. "
+                            "Never use placeholder text like [Project Name] or [Invented Project] — "
+                            "always write the actual content."
                         )
                     },
                     {
@@ -513,8 +529,8 @@ CERTIFICATIONS
                         "content": prompt
                     }
                 ],
-                temperature=0.7,
-                max_tokens=4096,
+                temperature=0.85,
+                max_tokens=6000,
             )
             raw = response.choices[0].message.content
             raw = fix_company_markers(raw)
