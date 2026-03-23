@@ -377,73 +377,86 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
     )
 
     prompt = f"""
-You are a senior CV writer who has placed candidates at top firms for 15 years. You write compelling, detailed resumes that read as if the candidate wrote them — confident and specific, never corporate-robotic.
+You are an experienced CV writer who specialises in taking thin, underdeveloped CVs and making them interview-worthy. Your job is to rewrite and expand the candidate's CV to match the target job — written like a real person, not an AI tool.
 
-THE GOLDEN RULE OF THIS CV:
-Every bullet tells a mini story: what you did + how + the result. Aim for 15-25 words per bullet.
-Bullets must feel like a person wrote them, not a bot. Specific details make them human.
+DETECTING A SHORT CV:
+If the original CV has fewer than 3 bullets per role, vague one-liners, or roles that are under-described, you MUST expand them significantly. Do not just repeat what's there — infer the realistic day-to-day work someone in that role would do, and write it out properly. A Service Desk Engineer handles tickets, troubleshoots hardware/software, manages users, liaises with vendors, escalates issues, maintains documentation — write all of that out.
 
-BANNED AI WORDS — never use these:
-spearheaded, leveraged, utilized, adept at, results-driven, dynamic, proven track record, synergies,
-cutting-edge, innovative solutions, streamlined, orchestrated, demonstrating, showcasing, encompassing,
-proficient, expertise in, robust, scalable, seamlessly, holistic, actionable
+EXPANSION RULES:
+1. Every role must have 3 bullets minimum, ideally 3 solid ones.
+2. If a bullet is vague ("Resolved customer queries", "Troubleshooted hardware problems") — expand it into a proper sentence with real context: what kind of queries, on which systems, for how many users, what the process was.
+3. If a role mentions a number (500 users, 1000 clients) — use that number but add the surrounding context that's missing.
+4. For projects — if described in one vague line, expand to show what was actually built or done.
+5. You can add 1-2 plausible bullets per role that a person in that position would genuinely do, even if not explicitly mentioned. Keep them believable and grounded.
 
-USE THESE INSTEAD:
-built, ran, managed, cut, grew, set up, led, helped, delivered, improved, created,
-handled, drove, fixed, worked on, reduced, increased, wrote, designed, deployed, trained,
-coordinated, launched, developed, maintained, resolved
+BULLET WRITING STYLE:
+Bullets should read like something you would say in an interview — specific, natural, not corporate.
+Each bullet: one clear action + what/how + optional outcome. Aim for 15-22 words.
+Outcomes do NOT have to be a percentage. Use variety:
+  - Counts: "for around 200 users across 3 floors"
+  - Timeframes: "resolved most tickets same-day"
+  - Scope: "covering hardware, software and network issues"
+  - Qualitative: "which meant the team stopped getting repeat calls on the same issue"
+  - Only use % when the CV itself mentions it and it feels natural
 
-INTRO — must sound like the person typed it themselves:
-GOOD example: "I've spent 4 years in IT support at companies like Morgan Stanley and Reliance, mostly dealing with M365, ServiceNow and Python automation. I enjoy building scripts and knowledge tools that actually save teams time."
-BAD example: "Results-driven IT professional with expertise in knowledge management."
-BAD example: "Proficient in Microsoft 365 environment."
-Write 2 sentences max. First: what they do, how long, where. Second: what they enjoy or are good at. Max 45 words total.
+MAX 1 percentage metric per role block. Do not put % in every bullet.
 
-BULLET EXAMPLES — this is the quality level required:
-GOOD: "Managed the full knowledge base for 3 product teams, cut article review time by 30% by writing Python scripts that flagged stale content automatically"
-GOOD: "Ran the OneDrive migration for 850 users across 3 offices, handling all communications, testing and post-cutover support over 6 weeks"
-BAD: "Managed knowledge base lifecycle with product owners"
-BAD: "Resolved L2 escalations from frontline teams"
-Every bullet must be 15-25 words with a specific number and real context.
+GOOD bullet examples:
+> Handled first-line support for 200 users at HDFC Bank, covering Flexcube, Finone and Outlook 365 issues daily
+> Set up and maintained antivirus across around 1000 endpoints at Wipro, running scheduled scans and dealing with any alerts that came through
+> Configured network printers across multiple floors, fixed connectivity issues and kept a log of recurring problems to spot patterns
+> Wrote a Python script to auto-categorise incoming ServiceNow tickets, which cut the manual triage time significantly
+> Helped onboard new staff by setting up their laptops, configuring email, and walking them through the main systems they would be using
 
-COMPANY BLOCK FORMAT — use EXACTLY this marker (one word, no symbols):
-COBLOCK Morgan Stanley - Mumbai
+BAD bullet examples (avoid entirely):
+> Resolved 500 customer queries, improved first-call resolution rate by 25%
+> Troubleshooted 50 hardware problems, reduced resolution time by 30%
+> Leveraged Python to streamline ticket automation processes
 
-Sub-role under COBLOCK (title | dates, two parts only):
-Technology Analyst | 12/2023 - Present
+BANNED WORDS — never use:
+spearheaded, leveraged, utilized, adept at, results-driven, dynamic, proven track record,
+synergies, cutting-edge, innovative, streamlined, orchestrated, demonstrating, showcasing,
+proficient, expertise in, robust, seamlessly, holistic, actionable, facilitated, ensured
 
-Flat single role (title | company | dates, three parts):
-Technical Support | Reliance Industries - Mumbai | 08/2022 - 12/2023
+INTRO STYLE:
+Write it like the candidate typed it themselves. First sentence: where they've worked and for how long. Second: what they are specifically good at or enjoy.
+Max 40 words. No buzzwords. No %.
+GOOD: "I've spent 2 years in IT support at Wipro and HDFC Bank, mostly handling day-to-day desktop and application support. I'm good at getting to the root of software issues quickly and keeping users up and running."
 
-BULLETS — use > as the prefix:
-> Managed the full knowledge base lifecycle with product owners, cut article review time by 30% using Python automation
+COMPANY BLOCK FORMAT — use exactly this marker:
+COBLOCK Reliance Industries - Mumbai
+
+Sub-role under COBLOCK (title | dates, 2 parts):
+Service Desk Engineer | 2024 - Present
+
+Flat single role (3 parts):
+Desktop Support Engineer | Wipro - Mumbai | 2022 - 11/2024
+
+ALL bullets use > prefix. Never use - as bullet prefix.
 
 RULES:
-1. COBLOCK for any company with 2+ years or multiple roles
-   - If only 1 title for 2+ years: invent 2-3 believable promotions, split dates proportionally
-   - 2-3 bullets per sub-role, each 15-25 words
-2. Flat 3-part pipe for short single-role companies, up to 3 bullets
-3. Every bullet: specific action + real context + concrete number. Sound natural, not corporate.
-4. Skills: 4 categories, 4-5 items each, JD-relevant order
-5. Intro: human, specific, conversational — see examples above
-6. Projects: keep all real ones (rewritten) + 2 invented using JD tools, 1 bullet each
-7. ALL bullets use > prefix. Never use - as bullet prefix.
+1. COBLOCK for companies with 2+ years or multiple roles. Flat 3-part for short single roles.
+2. If only 1 title for 2+ years: invent 2-3 believable promotions, split dates proportionally.
+3. Minimum 3 bullets per role. Max 3. Each 15-22 words. Expand vague lines.
+4. MAX 1 % per role block. Use counts, scope and qualitative outcomes for the rest.
+5. Projects: keep all real ones (expanded properly) + add exactly 2 new ones using JD tools.
+6. Project bullets: 1 per project, 12-18 words, real specific description.
+7. Skills: 4 categories, 4-5 items each. Add JD-adjacent tools plausibly.
 8. Never invent companies, degrees, or certifications.
-9. Enhance up to 30% — add JD-adjacent tools/skills that are plausible given the real experience.
-10. {visa_note}
-11. {layout_note}
+9. {visa_note}
+10. {layout_note}
 
 SECTION ORDER (never change):
 NAME > CONTACT > INTRODUCTION > TECHNICAL SKILLS > PROFESSIONAL EXPERIENCE > PROJECTS > EDUCATION > CERTIFICATIONS
 
 FORMAT RULES:
-- No ** bold markers
-- No ### headers  
+- No ** bold anywhere
+- No ### headers
 - No --- dividers
 - Section headers: ALL CAPS
 - Skill lines: Category: item1, item2, item3  (colon format, no > prefix)
-- Project lines: Name | Tech1, Tech2  (two-part pipe, no dates)
-- ALL other list items use > prefix
+- Project lines: Project Name | Tech1, Tech2  (2-part pipe, no dates)
+- All bullets use > prefix
 
 ---
 ORIGINAL CV:
@@ -454,7 +467,7 @@ TARGET JOB DESCRIPTION:
 {job_description}
 
 ---
-OUTPUT (follow exactly):
+OUTPUT (write the actual content — no placeholders like [bullet] or [Project Name]):
 
 NAME
 [Full Name]
@@ -463,7 +476,7 @@ CONTACT
 [Phone] | [Email] | [Location]
 
 INTRODUCTION
-[2 human, specific sentences. First: experience summary. Second: what you like/are good at. Under 40 words.]
+[2 human sentences. Where worked + how long. What good at. Max 40 words. No %.]
 
 TECHNICAL SKILLS
 [Category]: [item1, item2, item3, item4]
@@ -473,32 +486,30 @@ TECHNICAL SKILLS
 
 PROFESSIONAL EXPERIENCE
 
-COBLOCK [Company Name - City]
+COBLOCK [Company - City]
 [Most Recent Role] | [Start] - [End]
-> [specific action + context + number, 15-25 words]
-> [specific action + context + number, 15-25 words]
-> [specific action + context + number, 15-25 words]
+> [expanded bullet, 15-22 words]
+> [expanded bullet, 15-22 words]
+> [expanded bullet, 15-22 words]
 [Previous Role] | [Start] - [End]
-> [specific action + context + number]
-> [specific action + context + number]
-[Earliest Role] | [Start] - [End]
-> [specific action + context + number]
-> [specific action + context + number]
+> [expanded bullet]
+> [expanded bullet]
+> [expanded bullet]
 
 [Flat Title] | [Company - City] | [Start] - [End]
-> [specific action + context + number, 15-25 words]
-> [specific action + context + number]
-> [specific action + context + number]
+> [expanded bullet]
+> [expanded bullet]
+> [expanded bullet]
 
 PROJECTS
-[Real project name from CV, rewritten] | [Tech1, Tech2]
-> [what it does + specific outcome, 15-20 words]
+[Real project name from CV] | [Tech Stack, enhanced with JD tools]
+> [expanded specific description, 12-18 words]
 
-[Give this a real believable project name based on JD tools — e.g. "ServiceNow Ticket Router" or "SharePoint Intranet Rebuild"] | [JD tools]
-> [what it does + specific metric, 15-20 words]
+[Invented project 1 — real name based on JD tools] | [JD tools]
+> [what it does and outcome, 12-18 words]
 
-[Give this a different real believable project name — e.g. "Python SLA Monitor" or "M365 Onboarding Automation"] | [JD tools]
-> [what it does + specific metric, 15-20 words]
+[Invented project 2 — real name based on JD tools] | [JD tools]
+> [what it does and outcome, 12-18 words]
 
 EDUCATION
 [Degree] | [University] | [Year]
@@ -517,11 +528,13 @@ CERTIFICATIONS
                     {
                         "role": "system",
                         "content": (
-                            "You are a professional resume writer. "
-                            "Output ONLY the resume content — no commentary, no markdown formatting, no explanations. "
-                            "Write naturally and specifically. Avoid all corporate buzzwords. "
-                            "Never use placeholder text like [Project Name] or [Invented Project] — "
-                            "always write the actual content."
+                            "You are an experienced CV writer. "
+                            "Write naturally — like a real person, not an AI. "
+                            "Never use corporate buzzwords. "
+                            "Vary how you express impact: use counts, timeframes, team sizes and qualitative outcomes — "
+                            "not a percentage on every bullet. Max 1 % per role block. "
+                            "Never write placeholder text like [Project Name] — always write the actual content. "
+                            "Output ONLY the resume. No commentary, no markdown, no explanations."
                         )
                     },
                     {
@@ -529,7 +542,7 @@ CERTIFICATIONS
                         "content": prompt
                     }
                 ],
-                temperature=0.85,
+                temperature=0.9,
                 max_tokens=6000,
             )
             raw = response.choices[0].message.content
@@ -1641,10 +1654,8 @@ if generate_btn:
             )
             if result.startswith("Error generating content:"):
                 err = result
-                if "429" in err or "quota" in err.lower():
-                    st.error("⚠️ Gemini API quota exceeded. Options:\n\n"
-                             "1. Wait until tomorrow (free tier resets daily)\n"
-                             "2. Enable billing at aistudio.google.com — costs ~$0.001 per CV")
+                if "429" in err or "rate" in err.lower() or "quota" in err.lower():
+                    st.error("⚠️ Groq API rate limit hit. Wait a moment and try again, or check your quota at console.groq.com")
                 else:
                     st.error(err)
             else:
