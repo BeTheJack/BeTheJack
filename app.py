@@ -109,9 +109,7 @@ def init_ai():
         st.error("🚨 API Key Missing. Set GROQ_API_KEY in environment variables or Streamlit Secrets.")
         return False
     try:
-        # Validate by creating client — doesn't make a network call
         client = Groq(api_key=api_key)
-        # Store in session state so tailor_cv can access it
         st.session_state["_groq_client"] = client
         return True
     except Exception as e:
@@ -194,7 +192,6 @@ def get_groq_client():
     client = st.session_state.get("_groq_client")
     if client:
         return client
-    # Fallback: rebuild from env
     key = ""
     try:
         key = st.secrets.get("GROQ_API_KEY", "")
@@ -209,7 +206,6 @@ def get_best_model() -> str:
     """
     Returns the best available Groq model for CV generation.
     Priority: llama-3.3-70b (best quality) → llama-3.1-70b → llama3-70b → 8b fallback.
-    Groq model names: https://console.groq.com/docs/models
     """
     client = get_groq_client()
     if not client:
@@ -226,7 +222,6 @@ def get_best_model() -> str:
         for p in priorities:
             if p in available:
                 return p
-        # Fallback: first llama model found
         for m in available:
             if "llama" in m.lower():
                 return m
@@ -251,27 +246,23 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
     for line in lines:
         stripped = line.strip()
 
-        # Blank line → reset counter
         if not stripped:
             bullet_count = 0
             result.append(line)
             continue
 
-        # ##COMPANY## header → reset
         if stripped.startswith('##COMPANY##'):
             bullet_count = 0
             current_cap  = max_bullets
             result.append(line)
             continue
 
-        # Pipe line → determine cap by number of parts
         if '|' in stripped and not stripped.startswith('-'):
             parts = [p.strip() for p in stripped.split('|')]
             bullet_count = 0
             if len(parts) >= 3:
-                current_cap = max_bullets   # flat role: 3 bullets
+                current_cap = max_bullets
             elif len(parts) == 2:
-                # Is p1 a date? → sub-role (cap 3). Otherwise project (cap 1).
                 import re as _re
                 is_date = bool(_re.search(
                     r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', parts[1]))
@@ -279,7 +270,6 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
             result.append(line)
             continue
 
-        # Section header → reset
         if (stripped.isupper() and len(stripped) > 3
                 and '|' not in stripped
                 and not any(c.isdigit() for c in stripped)):
@@ -288,15 +278,13 @@ def enforce_bullet_limit(text: str, max_bullets: int = 3) -> str:
             result.append(line)
             continue
 
-        # Bullet line → enforce cap
         if stripped.startswith('-') and len(stripped) > 1:
             bullet_count += 1
             if bullet_count > current_cap:
-                continue   # silently drop excess
+                continue
             result.append(line)
             continue
 
-        # Everything else → keep
         result.append(line)
 
     return '\n'.join(result)
@@ -318,13 +306,13 @@ def fix_company_markers(text: str) -> str:
     }
     result = []
     for line in text.split('\n'):
-        s = line.strip()                              # strip whitespace
-        s_clean = re.sub(r'\*+', '', s).strip()       # strip markdown bold
+        s = line.strip()
+        s_clean = re.sub(r'\*+', '', s).strip()
         m = pattern.match(s_clean)
         if m:
             name = m.group(1).strip().lstrip('#*:- ')
             if name and name.upper() not in SECTION_KEYWORDS:
-                result.append(f'##COMPANY## {name}')  # always clean, no leading spaces
+                result.append(f'##COMPANY## {name}')
                 continue
         if s.startswith('##COMPANY##'):
             name = s[len('##COMPANY##'):].strip()
@@ -344,13 +332,137 @@ def fix_bullet_markers(text: str) -> str:
         stripped = line.strip()
         if stripped.startswith('> ') or stripped == '>':
             content = stripped[1:].lstrip()
-            # Clean markdown from bullet text
             content = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', content)
             result.append('- ' + content)
         else:
-            # Clean markdown from non-bullet lines too
             cleaned = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', line)
             result.append(cleaned)
+    return '\n'.join(result)
+
+
+def enforce_certifications(tailored: str, original_cv: str) -> str:
+    """
+    Strips any certification bullet from the tailored CV that doesn't appear
+    (loosely) in the original CV text. Prevents hallucinated certs.
+    If no certs exist in original, replaces section content with 'None listed.'
+    """
+    lines = tailored.split('\n')
+    result = []
+    in_certs = False
+    original_lower = original_cv.lower()
+
+    # Check if original CV has ANY certification content at all
+    has_any_certs = bool(re.search(
+        r'certif|cisco|comptia|aws|azure|google cloud|pmp|itil|scrum|prince2|ccna|ccnp|mcsa|mcse|rhce|ceh|oscp',
+        original_lower
+    ))
+
+    cert_bullets_written = 0
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped.upper() == 'CERTIFICATIONS':
+            in_certs = True
+            cert_bullets_written = 0
+            result.append(line)
+            continue
+
+        if in_certs:
+            # Exit cert section on new ALL-CAPS section header
+            if (stripped.isupper() and len(stripped) > 3
+                    and '|' not in stripped
+                    and not stripped.startswith('-')
+                    and stripped.upper() != 'CERTIFICATIONS'):
+                # If no real certs were written, add a placeholder
+                if cert_bullets_written == 0:
+                    result.append('- None listed')
+                in_certs = False
+                result.append(line)
+                continue
+
+            if stripped.startswith('-') and len(stripped) > 1:
+                cert_text = stripped[1:].strip().lower()
+
+                if not has_any_certs:
+                    # Original CV has zero certs — drop everything
+                    continue
+
+                # Check if meaningful words from this cert appear in original CV
+                words = [w for w in re.split(r'\W+', cert_text) if len(w) > 3]
+                matched = sum(1 for w in words if w in original_lower)
+                threshold = min(2, len(words))
+
+                if len(words) == 0 or matched < threshold:
+                    continue  # invented cert — drop it
+
+                result.append(line)
+                cert_bullets_written += 1
+                continue
+
+            # Non-bullet line inside certs (e.g. "None listed" plain text) — keep
+            result.append(line)
+            continue
+
+        result.append(line)
+
+    # Handle case where certs section was last and had no valid bullets
+    if in_certs and cert_bullets_written == 0:
+        result.append('- None listed')
+
+    return '\n'.join(result)
+
+
+def enforce_jake_format(text: str) -> str:
+    """
+    Cleans up common LLM format deviations for the India/Jake single-column layout.
+    - Removes stray markdown (**, ##, ---)
+    - Normalises section headers to ALL CAPS
+    - Ensures skill lines use 'Category: items' not '- Category: items'
+    - Removes [SIDEBAR_START] / [MAIN_START] markers that bleed into India output
+    - Strips any stray pipe-less date lines that look like misformatted role headers
+    """
+    known_sections = {
+        'professional experience', 'technical skills', 'skills',
+        'projects', 'education', 'certifications', 'contact',
+        'introduction', 'summary', 'name'
+    }
+    lines = text.split('\n')
+    result = []
+
+    for line in lines:
+        # Strip sidebar markers
+        line = line.replace('[SIDEBAR_START]', '').replace('[MAIN_START]', '')
+
+        # Strip markdown bold/italic/headers
+        line = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', line)
+        line = re.sub(r'^#{1,6}\s*', '', line)
+        line = re.sub(r'^---+$', '', line)
+
+        stripped = line.strip()
+        if not stripped:
+            result.append('')
+            continue
+
+        # Normalise near-match section headers to ALL CAPS
+        lower = stripped.lower().rstrip(':').strip()
+        if lower in known_sections:
+            result.append(stripped.upper().rstrip(':'))
+            continue
+
+        # Fix skill lines that start with a dash but contain a colon
+        # "- Category: items" → "Category: items"
+        # Only unwrap if it looks like a skill (short category before colon)
+        if stripped.startswith('-') and ':' in stripped:
+            potential = stripped[1:].lstrip()
+            colon_idx = potential.index(':')
+            cat_candidate = potential[:colon_idx].strip()
+            if len(cat_candidate.split()) <= 4 and len(cat_candidate) > 1:
+                result.append(potential)
+                continue
+
+        result.append(line)
+
     return '\n'.join(result)
 
 
@@ -373,7 +485,7 @@ def tailor_cv(raw_cv_text: str, job_description: str, style: str = "Global") -> 
         "(Contact, Introduction, Skills, Certifications, Education) and [MAIN_START] before "
         "the main section (Experience, Projects)."
         if style == "Global"
-        else "Single column, clean ATS-friendly layout."
+        else "Single column, clean ATS-friendly layout. Do NOT include [SIDEBAR_START] or [MAIN_START] markers."
     )
 
     prompt = f"""
@@ -443,8 +555,9 @@ RULES:
 6. Project bullets: 1 per project, 12-18 words, real specific description.
 7. Skills: 4 categories, 4-5 items each. Add JD-adjacent tools plausibly.
 8. Never invent companies, degrees, or certifications.
-9. {visa_note}
-10. {layout_note}
+9. CERTIFICATIONS — CRITICAL RULE: Copy certifications EXACTLY and ONLY as they appear in the original CV. Do NOT invent, add, guess, or infer any certification not explicitly written in the original CV. If the original CV has zero certifications listed, write ONLY: CERTIFICATIONS followed by a new line with: - None listed. This rule is absolute — no exceptions.
+10. {visa_note}
+11. {layout_note}
 
 SECTION ORDER (never change):
 NAME > CONTACT > INTRODUCTION > TECHNICAL SKILLS > PROFESSIONAL EXPERIENCE > PROJECTS > EDUCATION > CERTIFICATIONS
@@ -453,8 +566,8 @@ FORMAT RULES:
 - No ** bold anywhere
 - No ### headers
 - No --- dividers
-- Section headers: ALL CAPS
-- Skill lines: Category: item1, item2, item3  (colon format, no > prefix)
+- Section headers: ALL CAPS, no trailing colon
+- Skill lines: Category: item1, item2, item3  (colon format, no > prefix, no leading dash)
 - Project lines: Project Name | Tech1, Tech2  (2-part pipe, no dates)
 - All bullets use > prefix
 
@@ -515,8 +628,7 @@ EDUCATION
 [Degree] | [University] | [Year]
 
 CERTIFICATIONS
-> [Cert 1]
-> [Cert 2]
+[Copy from original CV only. If none exist write: - None listed]
 """
     import time
     last_err = None
@@ -534,6 +646,8 @@ CERTIFICATIONS
                             "Vary how you express impact: use counts, timeframes, team sizes and qualitative outcomes — "
                             "not a percentage on every bullet. Max 1 % per role block. "
                             "Never write placeholder text like [Project Name] — always write the actual content. "
+                            "CERTIFICATIONS: copy only what is in the original CV. Never invent certifications. "
+                            "If no certifications exist in the original CV, write: CERTIFICATIONS then on the next line: - None listed. "
                             "Output ONLY the resume. No commentary, no markdown, no explanations."
                         )
                     },
@@ -548,11 +662,13 @@ CERTIFICATIONS
             raw = response.choices[0].message.content
             raw = fix_company_markers(raw)
             raw = fix_bullet_markers(raw)
+            if style == "India":
+                raw = enforce_jake_format(raw)
+            raw = enforce_certifications(raw, raw_cv_text)
             return enforce_bullet_limit(raw, max_bullets=3)
         except Exception as e:
             last_err = e
             err_str = str(e)
-            # Rate limit — wait and retry
             if "429" in err_str or "rate" in err_str.lower() or "limit" in err_str.lower():
                 wait = (attempt + 1) * 15
                 st.warning(f"⏳ Rate limit hit — retrying in {wait}s... (attempt {attempt+1}/3)")
@@ -573,69 +689,27 @@ def sanitize(text: str) -> str:
     Maps every known problematic character explicitly before the final encode.
     Uses 'replace' as final fallback so it NEVER raises an exception.
     """
-    # Explicit character mappings — covers everything Gemini commonly outputs
     replacements = {
-        # Dashes & hyphens
-        '\u2013': '-',   # en dash
-        '\u2014': '-',   # em dash
-        '\u2012': '-',   # figure dash
-        '\u2015': '-',   # horizontal bar
-        '\u2212': '-',   # minus sign
-        # Quotes
-        '\u2018': "'",   # left single quote
-        '\u2019': "'",   # right single quote
-        '\u201a': "'",   # single low-9 quote
-        '\u201c': '"',   # left double quote
-        '\u201d': '"',   # right double quote
-        '\u201e': '"',   # double low-9 quote
-        '\u00ab': '"',   # left angle quote
-        '\u00bb': '"',   # right angle quote
-        # Bullets & symbols
-        '\u2022': '-',   # bullet
-        '\u2023': '-',   # triangular bullet
-        '\u25cf': '-',   # black circle
-        '\u2219': '-',   # bullet operator
-        '\u00b7': '-',   # middle dot
-        # Ellipsis
-        '\u2026': '...',
-        # Spaces
-        '\u00a0': ' ',   # non-breaking space
-        '\u202f': ' ',   # narrow no-break space
-        '\u2009': ' ',   # thin space
-        '\u200b': '',    # zero-width space (remove)
-        '\u200c': '',    # zero-width non-joiner (remove)
-        '\u200d': '',    # zero-width joiner (remove)
-        '\ufeff': '',    # BOM (remove)
-        # Arrows (common in AI output)
-        '\u2192': '->',
-        '\u2190': '<-',
-        '\u21d2': '=>',
-        # Other common symbols
-        '\u00d7': 'x',   # multiplication sign
-        '\u00f7': '/',   # division sign
-        '\u00b0': ' deg',
-        '\u00ae': '(R)',
-        '\u00a9': '(C)',
-        '\u2122': '(TM)',
-        '\u20ac': 'EUR',
-        '\u00a3': 'GBP',
-        '\u00a5': 'JPY',
-        # Fractions
-        '\u00bd': '1/2',
-        '\u00bc': '1/4',
-        '\u00be': '3/4',
+        '\u2013': '-', '\u2014': '-', '\u2012': '-', '\u2015': '-', '\u2212': '-',
+        '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201c': '"', '\u201d': '"',
+        '\u201e': '"', '\u00ab': '"', '\u00bb': '"',
+        '\u2022': '-', '\u2023': '-', '\u25cf': '-', '\u2219': '-', '\u00b7': '-',
+        '\u2026': '...', '\u00a0': ' ', '\u202f': ' ', '\u2009': ' ',
+        '\u200b': '', '\u200c': '', '\u200d': '', '\ufeff': '',
+        '\u2192': '->', '\u2190': '<-', '\u21d2': '=>',
+        '\u00d7': 'x', '\u00f7': '/', '\u00b0': ' deg',
+        '\u00ae': '(R)', '\u00a9': '(C)', '\u2122': '(TM)',
+        '\u20ac': 'EUR', '\u00a3': 'GBP', '\u00a5': 'JPY',
+        '\u00bd': '1/2', '\u00bc': '1/4', '\u00be': '3/4',
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
 
-    # Strip markdown artifacts the AI sometimes adds
-    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)  # remove **bold** / *italic*
-    text = re.sub(r'#{1,6}\s?', '', text)                   # remove ### headers
-    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)  # remove --- dividers
-    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)          # remove `code` blocks
+    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)
+    text = re.sub(r'#{1,6}\s?', '', text)
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)
 
-    # Final encode: replace any remaining non-Latin-1 chars with '?'
-    # This NEVER raises — worst case a rare char becomes '?'
     text = text.encode('latin-1', errors='replace').decode('latin-1')
     return text
 
@@ -663,18 +737,15 @@ def build_docx(content: str) -> bytes:
     """
     Converts the tailored CV text into a clean, ATS-friendly DOCX file.
     Uses python-docx with professional formatting matching Jake's Resume style.
-    Works for both India (single column) and Global (text only, no sidebar) outputs.
     """
     from docx import Document as DocxDocument
     from docx.shared import Pt, Inches, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
-    import copy
 
     doc = DocxDocument()
 
-    # ── Page margins: 0.75 inch all sides ────────────────────────────────────
     section = doc.sections[0]
     margin = Inches(0.75)
     section.top_margin    = margin
@@ -682,7 +753,6 @@ def build_docx(content: str) -> bytes:
     section.left_margin   = margin
     section.right_margin  = margin
 
-    # ── Default paragraph spacing: no space after ────────────────────────────
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
     style.font.size = Pt(10)
@@ -710,7 +780,6 @@ def build_docx(content: str) -> bytes:
         return p
 
     def add_rule(color_hex='000000'):
-        """Add a thin horizontal rule under a section header."""
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after  = Pt(2)
@@ -726,9 +795,7 @@ def build_docx(content: str) -> bytes:
         return p
 
     def add_two_col_run(p, left_text, left_bold, right_text, right_italic=True):
-        """Add bold left text + italic right text on same paragraph line with tab."""
         p.clear()
-        # Tab stop at right margin
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
         from docx.shared import Inches
@@ -736,7 +803,7 @@ def build_docx(content: str) -> bytes:
         tabs = OxmlElement('w:tabs')
         tab = OxmlElement('w:tab')
         tab.set(qn('w:val'), 'right')
-        tab.set(qn('w:pos'), '9072')   # 6.3 inches in twentieths of a pt
+        tab.set(qn('w:pos'), '9072')
         tabs.append(tab)
         pPr.append(tabs)
         run_l = p.add_run(left_text)
@@ -751,14 +818,12 @@ def build_docx(content: str) -> bytes:
         run_r.font.name = 'Calibri'
         run_r.font.color.rgb = RGBColor(100, 100, 100)
 
-    # ── Parse and render ──────────────────────────────────────────────────────
     text = content.replace('[SIDEBAR_START]', '').replace('[MAIN_START]', '')
     lines = [l.rstrip() for l in text.split('\n')]
 
     SKIP_WORDS = {'NAME', 'CONTACT', 'SIDEBAR_START', 'MAIN_START'}
     NAVY = (18, 40, 76)
 
-    # Find name and contact
     name_line = next((l.strip() for l in lines
                       if l.strip() and l.strip() not in SKIP_WORDS
                       and l.strip() != 'INTRODUCTION'
@@ -783,7 +848,6 @@ def build_docx(content: str) -> bytes:
         if not line:
             continue
 
-        # NAME
         if not name_done and line == name_line:
             p = add_para(line.title(), bold=True, size=20,
                          align=WD_ALIGN_PARAGRAPH.CENTER,
@@ -791,7 +855,6 @@ def build_docx(content: str) -> bytes:
             name_done = True
             continue
 
-        # CONTACT
         if name_done and not contact_done and line == contact_line:
             add_para(line, italic=False, size=9,
                      align=WD_ALIGN_PARAGRAPH.CENTER,
@@ -799,21 +862,17 @@ def build_docx(content: str) -> bytes:
             contact_done = True
             continue
 
-        # INTRODUCTION keyword
         if line == 'INTRODUCTION':
             intro_mode = True
             continue
 
-        # Intro paragraph text
         if intro_mode:
             if (line.isupper() and len(line) > 3 and '|' not in line) or line.startswith('##'):
                 intro_mode = False
-                # fall through
             else:
                 add_para(line, italic=True, size=9, color=(60, 60, 60), space_after=1)
                 continue
 
-        # ##COMPANY## header
         if line.startswith('##COMPANY##'):
             company_name = line.replace('##COMPANY##', '').strip()
             in_experience = True
@@ -822,7 +881,6 @@ def build_docx(content: str) -> bytes:
             add_rule('000000')
             continue
 
-        # SECTION HEADER
         if (line.isupper() and 3 < len(line) <= 35
                 and '|' not in line and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
@@ -832,12 +890,10 @@ def build_docx(content: str) -> bytes:
             add_rule('000000')
             continue
 
-        # PIPE LINE: role, sub-role, or project
         if '|' in line and not line.startswith('-'):
             parts = [p.strip() for p in line.split('|')]
 
             if len(parts) >= 3:
-                # Flat role: Title | Company - City | Dates
                 title, company, dates = parts[0], parts[1], parts[2]
                 p = doc.add_paragraph()
                 p.paragraph_format.space_before = Pt(4)
@@ -850,21 +906,18 @@ def build_docx(content: str) -> bytes:
                 is_date = bool(re.search(
                     r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
                 if is_date:
-                    # Sub-role under ##COMPANY##
                     p = doc.add_paragraph()
                     p.paragraph_format.space_before = Pt(3)
                     p.paragraph_format.space_after  = Pt(0)
                     p.paragraph_format.left_indent  = Inches(0.15)
                     add_two_col_run(p, p0, True, p1)
                 else:
-                    # Project: Name | Tech Stack
                     p = doc.add_paragraph()
                     p.paragraph_format.space_before = Pt(3)
                     p.paragraph_format.space_after  = Pt(0)
                     add_two_col_run(p, p0, True, p1)
             continue
 
-        # SKILL LINE "Category: items"
         if ':' in line and not line.startswith('-'):
             colon_idx = line.index(':')
             cat = line[:colon_idx].strip()
@@ -882,7 +935,6 @@ def build_docx(content: str) -> bytes:
                 run_det.font.name = 'Calibri'
                 continue
 
-        # BULLET
         if line.startswith('-'):
             content_text = line[1:].lstrip()
             indent = 0.25 if in_experience else 0.15
@@ -896,10 +948,8 @@ def build_docx(content: str) -> bytes:
             run.font.name = 'Calibri'
             continue
 
-        # REGULAR TEXT (intro sentences etc.)
         add_para(line, size=9.5, color=(50, 50, 50), space_after=1)
 
-    # ── Save to bytes ─────────────────────────────────────────────────────────
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -918,51 +968,41 @@ def build_pdf(content: str, style: str, photo_path: str = None, photo_size: int 
     else:
         _build_india_pdf(pdf, content)
 
-    # pdf.output(dest='S') returns a bytearray in fpdf 1.x, or bytes in fpdf2.
-    # Handle both safely.
     raw = pdf.output(dest='S')
     if isinstance(raw, (bytes, bytearray)):
         return bytes(raw)
-    # Legacy fpdf 1.x returns a latin-1 string
     return raw.encode('latin-1', errors='replace')
 
 
 def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: int = 52):
     """
-    Premium two-column sidebar layout inspired by the attached PDF reference.
-    Dark navy sidebar, gold accent line, square-ish photo, bold company names in main.
-
-    photo_size: width in mm of the profile photo (user-adjustable, default 52)
+    Premium two-column sidebar layout.
+    Dark navy sidebar, gold accent line, circle photo, bold company names in main.
     """
-    # ── Layout constants ──────────────────────────────────────────────────────
     SIDEBAR_W    = 72
-    SIDEBAR_X    = 6           # left text padding
-    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4   # = 62 mm usable
+    SIDEBAR_X    = 6
+    SIDEBAR_TW   = SIDEBAR_W - SIDEBAR_X - 4
     MAIN_X       = SIDEBAR_W + 6
     PAGE_W       = 210
     RIGHT_MARGIN = 9
     MAIN_W       = PAGE_W - MAIN_X - RIGHT_MARGIN
     PAGE_H       = 297
 
-    # Colour palette — matches the reference PDF
-    NAVY         = (18,  40,  76)   # dark navy sidebar bg
-    GOLD         = (180, 148,  80)  # gold accent
-    SIDEBAR_TEXT = (220, 220, 220)  # light text on dark bg
-    SIDEBAR_DIM  = (160, 160, 160)  # dimmer text (contact details)
+    NAVY         = (18,  40,  76)
+    GOLD         = (180, 148,  80)
+    SIDEBAR_TEXT = (220, 220, 220)
+    SIDEBAR_DIM  = (160, 160, 160)
     WHITE        = (255, 255, 255)
     BLACK        = (10,  10,  10)
     DARK_GREY    = (50,  50,  50)
     MID_GREY     = (100, 100, 100)
 
-    # ── Full-page navy sidebar background ────────────────────────────────────
     pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, SIDEBAR_W, PAGE_H, 'F')
 
-    # Gold accent top bar (full width)
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 0, PAGE_W, 3, 'F')
 
-    # ── Split content ─────────────────────────────────────────────────────────
     sidebar_text = ""
     main_text    = text
     if "[SIDEBAR_START]" in text and "[MAIN_START]" in text:
@@ -976,24 +1016,18 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
     SKIP_WORDS = {"NAME", "CONTACT", "INTRODUCTION", "SIDEBAR_START", "MAIN_START"}
 
-    # ════════════════════════════════════════════════════════════════════════
-    # SIDEBAR
-    # ════════════════════════════════════════════════════════════════════════
-    cur_y = 8  # start below gold top bar
+    cur_y = 8
 
-    # ── Profile photo — CIRCLE crop, centered in sidebar ─────────────────────
     if photo_path and os.path.exists(photo_path):
         try:
             img  = Image.open(photo_path).convert("RGBA")
             size = min(img.size)
             img  = ImageOps.fit(img, (size, size), centering=(0.5, 0.25))
-            # Create circular mask
             mask = Image.new('L', (size, size), 0)
             ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
             circle = Image.new('RGBA', (size, size), (0, 0, 0, 0))
             circle.paste(img, mask=mask)
-            # Paste on white bg (FPDF needs RGB)
-            bg = Image.new('RGB', (size, size), (18, 40, 76))  # navy bg matches sidebar
+            bg = Image.new('RGB', (size, size), (18, 40, 76))
             bg.paste(circle, mask=circle.split()[3])
             circ_path = "temp_circle_photo.png"
             bg.save(circ_path, "PNG")
@@ -1005,7 +1039,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         except Exception:
             cur_y = 8
 
-    # Gold divider under photo
     pdf.set_draw_color(*GOLD)
     pdf.set_line_width(0.6)
     pdf.line(SIDEBAR_X, cur_y, SIDEBAR_W - 4, cur_y)
@@ -1014,14 +1047,13 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 
     pdf.set_xy(SIDEBAR_X, cur_y)
 
-    # Find name (first non-skip, non-pipe, non-empty line in sidebar)
     name_line = next(
         (l.strip() for l in sidebar_text.split('\n')
          if l.strip() and l.strip() not in SKIP_WORDS and '|' not in l),
         ''
     )
 
-    sidebar_intro_lines = 0   # count intro sentences rendered — cap at 2
+    sidebar_intro_lines = 0
 
     for raw_line in sidebar_text.split('\n'):
         line = raw_line.strip()
@@ -1033,7 +1065,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if line in SKIP_WORDS:
             continue
 
-        # ── Name ─────────────────────────────────────────────────────────────
         if line == name_line:
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 13)
@@ -1047,11 +1078,10 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(3)
             continue
 
-        # ── Section header (ALL CAPS, not a skip word, no digits) ────────────
         if (line.isupper() and 3 < len(line) < 30
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
-            sidebar_intro_lines = 0  # reset intro counter on new section
+            sidebar_intro_lines = 0
             pdf.ln(3)
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", 'B', 7.5)
@@ -1065,7 +1095,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(1.5)
             continue
 
-        # ── Skill line "Category: item1, item2" (no dash prefix) ─────────────
         if ":" in line and not line.startswith("-"):
             colon_idx = line.index(":")
             cat = line[:colon_idx].strip()
@@ -1082,7 +1111,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
                 pdf.ln(0.2)
                 continue
 
-        # ── Skill bullet "- Category: items" ─────────────────────────────────
         if line.startswith("-") and ":" in line:
             cat_part, _, det_part = line.partition(":")
             cat = cat_part.replace("-", "").strip()
@@ -1098,7 +1126,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(0.2)
             continue
 
-        # ── Bullet (certs list) ───────────────────────────────────────────────
         if line.startswith("-"):
             pdf.set_x(SIDEBAR_X + 2)
             pdf.set_font("Arial", '', 7.5)
@@ -1106,10 +1133,7 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(SIDEBAR_TW - 2, 4, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # ── Regular sidebar text (intro sentences, contact, education) ────────
-        # Cap intro at 2 sentences to prevent sidebar overflow
         if sidebar_intro_lines < 2:
-            # Truncate to first sentence if very long
             display = line[:120] + ('...' if len(line) > 120 else '')
             pdf.set_x(SIDEBAR_X)
             pdf.set_font("Arial", size=7.5)
@@ -1117,17 +1141,13 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(SIDEBAR_TW, 4, display, align='L')
             sidebar_intro_lines += 1
         else:
-            # Still render non-intro text (contact details, education etc.)
-            # but skip if it looks like more intro prose (long sentences)
             if len(line) < 50 or '|' in line or '@' in line or any(c.isdigit() for c in line[:8]):
                 pdf.set_x(SIDEBAR_X)
                 pdf.set_font("Arial", size=7.5)
                 pdf.set_text_color(*SIDEBAR_DIM)
                 pdf.multi_cell(SIDEBAR_TW, 4, line, align='L')
 
-    # ════════════════════════════════════════════════════════════════════════
     # MAIN COLUMN
-    # ════════════════════════════════════════════════════════════════════════
     pdf.set_xy(MAIN_X, 8)
     pdf.set_text_color(*BLACK)
 
@@ -1150,7 +1170,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
         if pdf.get_y() > PAGE_H - 12:
             _new_page()
 
-        # Section header
         if (line.isupper() and len(line) < 40
                 and line not in SKIP_WORDS
                 and not any(c.isdigit() for c in line)):
@@ -1169,7 +1188,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(3)
             continue
 
-        # ##COMPANY## header
         if line.startswith("##COMPANY##"):
             company_name = line.replace("##COMPANY##", "").strip()
             if pdf.get_y() > PAGE_H - 18:
@@ -1189,7 +1207,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.ln(1.5)
             continue
 
-        # Pipe line: 3-part=flat role, 2-part=sub-role or project
         if "|" in line and not line.startswith("-"):
             parts = [p.strip() for p in line.split("|")]
             pdf.ln(3)
@@ -1257,7 +1274,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.set_text_color(*BLACK)
             continue
 
-        # Bullet
         if line.startswith("-"):
             pdf.set_x(MAIN_X + 3)
             pdf.set_font("Arial", size=9)
@@ -1265,7 +1281,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
             pdf.multi_cell(MAIN_W - 3, 4.5, "\x95 " + line[1:].lstrip(), align='L')
             continue
 
-        # Regular text
         pdf.set_x(MAIN_X)
         pdf.set_font("Arial", size=9)
         pdf.set_text_color(*DARK_GREY)
@@ -1275,8 +1290,6 @@ def _build_global_pdf(pdf: FPDF, text: str, photo_path: str = None, photo_size: 
 def _build_india_pdf(pdf: FPDF, text: str):
     """
     Jake Resume — strict 1-page ATS layout with auto font-size scaling.
-    Counts meaningful content lines first, then picks font/spacing preset
-    so content fills the page without overflowing or leaving large gaps.
     """
     MARGIN   = 10.0
     PAGE_W   = 210
@@ -1293,11 +1306,9 @@ def _build_india_pdf(pdf: FPDF, text: str):
     text  = text.replace("[SIDEBAR_START]", "").replace("[MAIN_START]", "")
     lines = [l.rstrip() for l in text.split("\n")]
 
-    # ── Estimate content density to pick scaling preset ──────────────────────
     meaningful = sum(1 for l in lines if l.strip()
                      and l.strip() not in SKIP_WORDS
                      and l.strip() != "INTRODUCTION")
-    # 3 presets: normal (≤55 lines), compact (56-70), tight (71+)
     if meaningful <= 52:
         BODY_PT   = 9.5;  HDR_PT = 10.5; LINE_H = 4.5; SEC_GAP = 5; BLK_GAP = 3
     elif meaningful <= 65:
@@ -1308,14 +1319,12 @@ def _build_india_pdf(pdf: FPDF, text: str):
     BULLET_X = MARGIN + 3
     BULLET_W = TEXT_W - 3
 
-    # Disable auto page break — manual control
     pdf.set_auto_page_break(auto=False)
     pdf.set_left_margin(MARGIN)
     pdf.set_right_margin(MARGIN)
     pdf.set_top_margin(MARGIN)
     pdf.set_y(MARGIN)
 
-    # Pre-pass: identify name and contact lines
     name_line = ""
     for l in lines:
         s = l.strip()
@@ -1337,7 +1346,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
     in_experience   = False
 
     def fits(needed_mm=5):
-        """True if there's enough space left on the page."""
         return pdf.get_y() + needed_mm < BOTTOM
 
     def draw_rule(thickness=0.3):
@@ -1350,13 +1358,12 @@ def _build_india_pdf(pdf: FPDF, text: str):
     for raw_line in lines:
         line = raw_line.strip()
 
-        # Hard stop — nothing renders past the page bottom
         if not fits(3):
             break
 
         if not line:
             if name_printed and fits(2):
-                pdf.ln(0.8)   # tighter blank line gap
+                pdf.ln(0.8)
             continue
 
         if line in SKIP_WORDS:
@@ -1365,7 +1372,7 @@ def _build_india_pdf(pdf: FPDF, text: str):
         # NAME
         if not name_printed and line == name_line:
             display_name = line.title()
-            pdf.set_font("Arial", "B", int(HDR_PT+7))   # 18pt vs 20pt — saves 1.5mm
+            pdf.set_font("Arial", "B", int(HDR_PT+7))
             pdf.set_text_color(*BLACK)
             pdf.set_x(MARGIN)
             pdf.cell(TEXT_W, 8, display_name, ln=True, align="C")
@@ -1396,7 +1403,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
         if intro_mode:
             if (line.isupper() and len(line) > 3 and "|" not in line) or line.startswith("##"):
                 intro_mode = False
-                # fall through
             else:
                 if fits(5):
                     pdf.set_x(MARGIN)
@@ -1461,7 +1467,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
                 is_date = bool(re.search(
                     r'\d{4}|Present|present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec', p1))
                 if is_date:
-                    # Sub-role
                     pdf.set_font("Arial", "B", HDR_PT-0.5)
                     pdf.set_text_color(*BLACK)
                     tw = min(pdf.get_string_width(p0) + 2, TEXT_W * 0.74)
@@ -1471,7 +1476,6 @@ def _build_india_pdf(pdf: FPDF, text: str):
                     pdf.set_text_color(*MID_GREY)
                     pdf.cell(TEXT_W - tw - 2, 4.5, p1, ln=1, align="R")
                 else:
-                    # Project
                     proj_name, tech_stack = p0, p1
                     pdf.set_font("Arial", "B", HDR_PT-0.5)
                     name_w = pdf.get_string_width(proj_name) + 2
@@ -1551,7 +1555,6 @@ st.markdown("""
 
 ai_connected = init_ai()
 
-# Session state
 for key, default in {
     "raw_cv_text": "",
     "tailored_content": "",
@@ -1691,7 +1694,12 @@ if st.session_state.tailored_content:
                 with open(photo_path, "wb") as f:
                     f.write(uploaded_photo.getbuffer())
 
-            pdf_bytes = build_pdf(st.session_state.tailored_content, style_choice, photo_path=photo_path, photo_size=st.session_state.photo_size)
+            pdf_bytes = build_pdf(
+                st.session_state.tailored_content,
+                style_choice,
+                photo_path=photo_path,
+                photo_size=st.session_state.photo_size
+            )
 
             if photo_path and os.path.exists(photo_path):
                 try: os.remove(photo_path)
